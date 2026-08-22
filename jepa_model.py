@@ -4,9 +4,11 @@ import os
 import sys
 
 class JEPAWorldModel(nn.Module):
-    def __init__(self, device='mps'):
+    def __init__(self, device='mps', num_samples=256, iterations=3):
         super().__init__()
         self.device = torch.device(device)
+        self.num_samples = num_samples
+        self.iterations = iterations
         
         # We load it using float16 to save memory on 16GB Mac
         self.dtype = torch.float16
@@ -83,9 +85,9 @@ class JEPAWorldModel(nn.Module):
                 # 2. Hyperparameters
                 horizon = 5 # 5 steps to reach goal
                 action_dim = self.model.action_dim if hasattr(self.model, 'action_dim') else 20 # frameskip * action_dim (e.g. 5 * 4 = 20)
-                num_samples = 256
-                iterations = 3
-                num_elites = 32
+                num_samples = self.num_samples
+                iterations = self.iterations
+                num_elites = max(8, num_samples // 8)
                 
                 # 3. Initialize distributions
                 mean = torch.zeros(horizon, action_dim, device=self.device, dtype=self.dtype)

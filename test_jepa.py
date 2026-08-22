@@ -31,7 +31,8 @@ def main():
     print("=" * 60)
 
     t0 = time.time()
-    model = JEPAWorldModel(device='mps')
+    # Reduced CEM size for quick pipeline verification (full-size perf is a separate task)
+    model = JEPAWorldModel(device='mps', num_samples=64, iterations=2)
     if model.model is None:
         print("FAIL: model did not load")
         raise SystemExit(1)
