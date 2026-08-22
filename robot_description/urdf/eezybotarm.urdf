@@ -1,0 +1,136 @@
+<?xml version="1.0"?>
+<robot name="eezybotarm">
+
+  <material name="blue">
+    <color rgba="0.2 0.2 0.8 1"/>
+  </material>
+
+  <material name="grey">
+    <color rgba="0.6 0.6 0.6 1"/>
+  </material>
+
+  <!-- Base Link (Fixed to ground) -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///Users/roopalisingh/WorldXD/3D%20MODELS%28CAD%29/socket.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///Users/roopalisingh/WorldXD/3D%20MODELS%28CAD%29/baseRing.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="blue"/>
+    </visual>
+  </link>
+
+  <!-- Joint 1: Base Yaw -->
+  <joint name="joint1" type="revolute">
+    <parent link="base_link"/>
+    <child link="shoulder_link"/>
+    <!-- Socket is ~12mm tall -->
+    <origin xyz="0 0 0.012" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.57" upper="1.57" effort="10.0" velocity="41.8879"/>
+  </joint>
+
+  <!-- Shoulder Link -->
+  <link name="shoulder_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///Users/roopalisingh/WorldXD/3D%20MODELS%28CAD%29/base.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="blue"/>
+    </visual>
+  </link>
+
+  <!-- Joint 2: Shoulder Pitch -->
+  <joint name="joint2" type="revolute">
+    <parent link="shoulder_link"/>
+    <child link="lower_arm_link"/>
+    <!-- Base is ~78mm tall. Hole is near top. -->
+    <origin xyz="0 0 0.066" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="10.0" velocity="41.8879"/>
+  </joint>
+
+  <!-- Lower Arm Link -->
+  <link name="lower_arm_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///Users/roopalisingh/WorldXD/3D%20MODELS%28CAD%29/lowerShank.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <!-- Joint 3: Elbow Pitch -->
+  <joint name="joint3" type="revolute">
+    <parent link="lower_arm_link"/>
+    <child link="upper_arm_link"/>
+    <!-- Lower arm length is 134mm along X -->
+    <origin xyz="0.134 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="10.0" velocity="41.8879"/>
+  </joint>
+
+  <!-- Upper Arm Link -->
+  <link name="upper_arm_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///Users/roopalisingh/WorldXD/3D%20MODELS%28CAD%29/upperShank.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="blue"/>
+    </visual>
+  </link>
+
+  <!-- Joint 4: Wrist Pitch -->
+  <joint name="joint4" type="revolute">
+    <parent link="upper_arm_link"/>
+    <child link="manipulator_link"/>
+    <!-- Upper arm forward length is 120mm along X -->
+    <origin xyz="0.120 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="10.0" velocity="41.8879"/>
+  </joint>
+
+  <!-- Manipulator / Gripper Link -->
+  <link name="manipulator_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///Users/roopalisingh/WorldXD/3D%20MODELS%28CAD%29/manipulator.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+    <visual>
+      <!-- Adjust gripper base to hang slightly below manipulator -->
+      <origin xyz="0 0 -0.015" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///Users/roopalisingh/WorldXD/3D%20MODELS%28CAD%29/gripperBase.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="blue"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0.02 -0.025" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///Users/roopalisingh/WorldXD/3D%20MODELS%28CAD%29/gripperFinger.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+    <visual>
+      <origin xyz="0 -0.02 -0.025" rpy="0 0 3.14159"/>
+      <geometry>
+        <mesh filename="file:///Users/roopalisingh/WorldXD/3D%20MODELS%28CAD%29/gripperFinger.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+</robot>

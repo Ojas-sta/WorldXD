@@ -1,0 +1,55 @@
+[workspace]
+name = "jepa_robot_arm"
+version = "0.1.0"
+description = "JEPA World Model controlling a 4-axis robotic arm in ROS 2"
+authors = ["Antigravity"]
+channels = ["conda-forge", "robostack-staging"]
+platforms = ["osx-arm64"]
+
+[dependencies]
+python = ">=3.10"
+pytorch = "*"
+torchvision = "*"
+numpy = "*"
+ros-humble-desktop = "*"
+ros-humble-robot-state-publisher = "*"
+ros-humble-joint-state-publisher = "*"
+ros-humble-joint-state-publisher-gui = "*"
+ros-humble-interactive-markers = "*"
+ros-humble-rviz2 = "*"
+ros-humble-xacro = "*"
+[pypi-dependencies]
+huggingface_hub = "*"
+timm = "*"
+einops = "*"
+torchrl = "*"
+tensordict = "*"
+omegaconf = "*"
+hydra-core = "*"
+pyyaml = "*"
+gym = "*"
+pygame = "*"
+pymunk = "*"
+shapely = "*"
+pybullet = "*"
+mujoco = "*"
+dm-control = "*"
+metaworld = { git = "https://github.com/Farama-Foundation/Metaworld.git" }
+scikit-image = "*"
+scipy = "*"
+matplotlib = "*"
+seaborn = "*"
+termcolor = "*"
+nevergrad = "*"
+lpips = "*"
+h5py = "*"
+pandas = "*"
+datasets = "*"
+wandb = "*"
+tqdm = "*"
+submitit = "*"
+clusterscope = "*"
+"ruamel.yaml" = "*"
+
+[tasks]
+jepa-run = "python3 jepa_ros_bridge.py"
