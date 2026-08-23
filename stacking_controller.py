@@ -12,6 +12,7 @@ import torchvision.transforms as transforms
 from jepa_model import JEPAWorldModel
 
 from sensor_msgs.msg import Image, JointState
+from geometry_msgs.msg import PointStamped
 from std_msgs.msg import Bool, String, Float32
 from tf2_ros import Buffer, TransformListener
 
@@ -30,6 +31,12 @@ class StackingController(Node):
         self.jepa_telemetry_pub = self.create_publisher(Float32, 'jepa_telemetry', 10)
         self.camera_sub = self.create_subscription(Image, '/camera/image_raw', self.image_callback, 10)
         self.prompt_sub = self.create_subscription(String, 'user_prompt', self.prompt_callback, 10)
+        # Manual jog: interactive-marker drags stream /ee_target; while targets
+        # arrive the controller tracks them (MANUAL state). Any task prompt exits.
+        self.ee_target_sub = self.create_subscription(
+            PointStamped, '/ee_target', self.ee_target_callback, 10)
+        self.manual_gripper_sub = self.create_subscription(
+            Bool, '/manual_gripper', self.manual_gripper_callback, 10)
         self._last_fsm_published = None
 
         self.bridge = CvBridge()
@@ -177,6 +184,20 @@ class StackingController(Node):
             finally:
                 self._latest_frame = None
 
+    # ------------------------------------------------------------- manual jog
+    def ee_target_callback(self, msg):
+        """Drag updates from the RViz interactive marker."""
+        self.manual_target = [msg.point.x, msg.point.y, msg.point.z]
+        if self.state != 'MANUAL':
+            self.queue = []
+            self.state = 'MANUAL'
+            self.state_ticks = 0
+            self.get_logger().info('MANUAL jog engaged (marker drag).')
+
+    def manual_gripper_callback(self, msg):
+        if self.state == 'MANUAL':
+            self._set_gripper(bool(msg.data))
+
     # ------------------------------------------------------------------- IK
     def solve_ik(self, x, y, z):
         theta1 = math.atan2(y, x)
@@ -231,6 +252,12 @@ class StackingController(Node):
 
         if self.state == 'DONE':
             pass
+
+        elif self.state == 'MANUAL':
+            # Track the interactive-marker target live (it moves under the drag).
+            t = getattr(self, 'manual_target', None)
+            if t is not None:
+                self._goto(t[0], t[1], t[2])
 
         elif self.state == 'MOVE_ABOVE_BLOCK':
             p = self._block_pos(self.pick_block_id)

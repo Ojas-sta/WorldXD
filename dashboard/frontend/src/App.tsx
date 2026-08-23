@@ -16,7 +16,7 @@ const SOCKET_URL = 'http://localhost:4002';
 
 // Real FSM states published by stacking_controller.py on /fsm_state
 const FSM_ORDER = [
-  'MOVE_ABOVE_BLOCK', 'DESCEND', 'CLOSE_GRIPPER', 'LIFT',
+  'MANUAL', 'MOVE_ABOVE_BLOCK', 'DESCEND', 'CLOSE_GRIPPER', 'LIFT',
   'MOVE_ABOVE_STACK', 'PLACE', 'OPEN_GRIPPER', 'RETREAT'
 ];
 

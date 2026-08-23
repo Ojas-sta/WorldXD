@@ -40,7 +40,7 @@ BANNER = (
     "[dim]\u00b7 world-model robot arm control[/]"
 )
 
-FSM_STEPS = ['MOVE_ABOVE_BLOCK', 'DESCEND', 'CLOSE_GRIPPER', 'LIFT',
+FSM_STEPS = ['MANUAL', 'MOVE_ABOVE_BLOCK', 'DESCEND', 'CLOSE_GRIPPER', 'LIFT',
              'MOVE_ABOVE_STACK', 'PLACE', 'OPEN_GRIPPER', 'RETREAT']
 COLOR_NAMES = {0: 'red', 1: 'green', 2: 'blue', 3: 'yellow'}
 
@@ -128,7 +128,7 @@ class StatusPanel(Static):
         glyphs = []
         for i, name in enumerate(FSM_STEPS):
             short = {
-                'MOVE_ABOVE_BLOCK': 'apprch', 'DESCEND': 'descnd',
+                'MANUAL': 'manual', 'MOVE_ABOVE_BLOCK': 'apprch', 'DESCEND': 'descnd',
                 'CLOSE_GRIPPER': 'grip', 'LIFT': 'lift',
                 'MOVE_ABOVE_STACK': 'transpt', 'PLACE': 'place',
                 'OPEN_GRIPPER': 'releas', 'RETREAT': 'retreat',

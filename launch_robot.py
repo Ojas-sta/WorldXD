@@ -89,6 +89,13 @@ Window Geometry:
             ["python3", "stacking_controller.py"]
         )
         processes.append(controller_proc)
+
+        # 3b. Start Manual Jog Marker (RViz interactive marker)
+        print("Launching Manual Marker...")
+        marker_proc = subprocess.Popen(
+            ["python3", "manual_marker.py"]
+        )
+        processes.append(marker_proc)
         
         # 4. Start RViz2
         print("Launching RViz2...")

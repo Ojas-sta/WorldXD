@@ -8,6 +8,7 @@ interface Props {
 }
 
 const LABELS: Record<string, string> = {
+  MANUAL: 'Manual Jog',
   MOVE_ABOVE_BLOCK: 'Approach',
   DESCEND: 'Descend',
   CLOSE_GRIPPER: 'Grip',
@@ -45,7 +46,8 @@ export const FsmPipeline: React.FC<Props> = ({ current, order }) => {
       <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
         {order.map((state, idx) => {
           const isActive = state === current;
-          const isDone = busy && activeIdx > idx;
+          // MANUAL is a mode, not a sequence step: never render it as "done"
+          const isDone = busy && activeIdx > idx && state !== 'MANUAL';
           return (
             <React.Fragment key={state}>
               {idx > 0 && (
