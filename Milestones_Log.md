@@ -580,6 +580,62 @@ while genuinely unsupported configurations still tumble — no behavior regresse
 
 ---
 
+# P3.6.2 — Edge-case sweep of the physics system (7 scenarios + 2 inspected suspects)
+
+**Commits:** [`see git log`](https://github.com/Ojas-sta/WorldXD/commits/main) · 2026-08-23 18:20
+
+## ① Plan
+
+User request: probe the physics for more corner-case bugs like P3.6.1, rate each finding
+by confidence (fix now vs defer), fix what's safe, and mark the rest tentative for
+retest at P4.1.
+
+## ② Findings & Fixes
+
+| Case | Result | Confidence / Action |
+|------|--------|---------------------|
+| **B1** symmetric <50% straddle floats forever | 🔴 **BUG confirmed live**: blue floated at 25% support | **Fixed now.** Deeper root cause found beneath the suspected one: unstable blocks "surfed" at supporter-top height and stabilized on the *neighbouring* block (the original P3.6.1 complaint resurfacing). New model — under-supported blocks **tip off**: slide out while gravity pulls them down into the gap. Retest: dropped to table ✓ |
+| **B2** drag-grace mismatch (0.35s vs 1.5s) | 🟡 marker/sim desync mid-fall | **Fixed now** — sync exemption aligned to 0.45s |
+| NEW: stale MANUAL jog target keeps arm wandering minutes later (corrupted R1/R4 test runs) | 🔴 real hazard | **Fixed now** — MANUAL times out 3s after last drag message → RETREAT → DONE |
+| E2 Y-junction | ✅ correct behavior; initial FAIL was my test's fault (3rd block contributed 0% overlap) | no code change |
+| E4 supporter yanked from live bridge | ✅ collapses correctly | — |
+| E5 exact-edge placement | ✅ resolves, no float | — |
+| E7 3-level tower, middle extracted | ✅ top falls onto base | — |
+| E3 straddle different heights | ⚠️ drops beside instead of tipping onto lower block — crude but stable | **Deferred — retest at P4.1** (confidence it stays deferred: 60%) |
+| E6 arm shoves block into block | ✅ no interpenetration observed this run (dist=0.045>0.039), but there is NO systematic lateral resolution — outcome is luck-dependent | **Deferred — retest at P4.1** (confidence needed eventually: 90%; risk per-run: low) |
+
+## ③ Test & Verification
+
+Sweep (pre-fix):
+```
+PASS(inverted)=B1 float bug reproduced: blue=(0.2, -0.1, 0.06) with 25% support
+FAIL | E2 Y-junction   ← test geometry error, not code
+PASS | E4 collapse on supporter removal
+PASS | E5 edge placement resolves
+PASS | E7 middle extraction from 3-level tower
+```
+Post-fix regression:
+```
+B1 FINAL: blue resolved: (0.199, -0.1, 0.02) -> PASS     ← dropped into gap, not onto supporter
+R1 fall            (0.15, -0.1, 0.02)              PASS
+R2 stack           (0.2, -0.1, 0.06)               PASS
+R3 bridge          (0.22, -0.08, 0.06)             PASS
+R4 tumble          (0.235, -0.1, 0.02)             PASS
+R5 stable          (0.21, -0.1, 0.06)              PASS
+R6 MANUAL timeout  blocks intact                   PASS
+ALL PASS
+```
+
+## ④ Overview
+
+The physics model now has a consistent rule set: ≥50% combined support rests; anything
+less tips and falls into whatever gap exists — it can no longer surf across supporter
+tops or hover indefinitely. Manual jogging self-expires so the arm always returns home.
+Two known limitations consciously deferred to P4.1 (E3 tipping fidelity, E6 lateral
+block-block resolution).
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
@@ -592,3 +648,5 @@ while genuinely unsupported configurations still tumble — no behavior regresse
 | — | Dashboard: real camera source | `CameraFeed` toggle stub exists; wire iPhone ARKit bridge for real feed |
 | — | wxd: camera snapshot preview in-TUI | Currently saves to `captures/`; could render half-block preview via textual-image plugin |
 | — | Duplicate prompts restart tasks | Each received prompt calls `_start_task` even mid-task; consider ignoring prompts while a task is active or queueing them |
+| — | **P4.1 retest:** E3 tipping fidelity | Block straddling different-height supporters drops beside rather than tipping onto the lower one |
+| — | **P4.1 retest:** E6 lateral block-block separation | No systematic AABB push-out between blocks after shoves; add small separation pass if it shows up in practice |
