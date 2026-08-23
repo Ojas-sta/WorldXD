@@ -419,6 +419,66 @@ commands; control returns automatically on completion.
 
 ---
 
+# P3.5 — Physics for the dummy blocks (gravity + stacking)
+
+**Commit:** [`see git log`](https://github.com/Ojas-sta/WorldXD/commits/main) · 2026-08-23 17:05
+
+## ① Plan
+
+User request: "add physics in rviz". RViz has no physics engine; PyBullet/MuJoCo (already
+in pixi deps) are overkill for four cubes. Chosen scope: lightweight rigid-body-ish
+behavior inside workspace_env at the existing 30Hz tick:
+- free blocks fall under scaled gravity
+- rest on the highest supporting surface (table surface or another block's top)
+- hand-dragged blocks stay kinematic while dragged, then physics resumes
+- dragging a block into a support column pushes it up (no interpenetration)
+- removing a base block collapses anything stacked on it
+
+## ② Implementation
+
+`workspace_env.py`:
+- `physics_step()` — per-block velocity integration (`GRAVITY=2.5 m/s²`, readable at 30Hz)
+- `_support_height()` — highest surface with XY overlap at/below block center;
+  `rest_z = support + BLOCK_HALF`
+- drag grace: `/block_move` messages stamp `_last_move[bid]`; blocks are kinematic for
+  0.35s after the last message, so RViz drags feel 1:1, then gravity takes over
+- grabbed blocks exempt (position owned by gripper TF); reset also zeroes velocities
+
+Bugs hit during implementation (both fixed same commit):
+1. Init-order crash: physics state referenced `self.blocks` before creation
+   → `AttributeError` on startup.
+2. Frame-offset bug: `TABLE_Z` set to 0.02 (the resting *center*) instead of 0.0 (the
+   table *surface*) → every block rested exactly 2cm high. Caught by tests T1–T3 all
+   failing with a uniform +0.02 offset.
+
+## ③ Test & Verification
+
+First run (offset bug present):
+```
+T1 blue after release: (0.15, -0.1, 0.04) -> FAIL     ← expected 0.02
+T2 red on yellow:      (0.2, -0.1, 0.08)  -> FAIL     ← expected 0.06
+T3 red fell to table:  (0.2, -0.1, 0.04)  -> FAIL
+```
+After TABLE_Z fix:
+```
+--- T1: FALL ---
+blue after release: (0.15, -0.1, 0.02) -> PASS        ← released mid-air, fell to table
+--- T2: STACK ON BLOCK ---
+red on yellow: (0.2, -0.1, 0.06) -> PASS              ← hovered above yellow, settled on its top
+--- T3: TOWER COLLAPSE ---
+red fell to table: (0.2, -0.1, 0.02) -> PASS          ← yanked yellow out; red collapsed
+yellow moved aside: (0.28, 0.18, 0.02)
+```
+
+## ④ Overview
+
+The scene now behaves physically: drop a block and it falls, lower it onto another and it
+stacks, pull a base block out and the tower collapses — visible in RViz, in the synthetic
+camera feed, and therefore to JEPA. Robot-stacked towers are real stacks now: if the arm
+places a block past the edge of the one below, gravity decides.
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
