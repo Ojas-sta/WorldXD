@@ -8,6 +8,7 @@ import math
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import Image, CameraInfo
+from builtin_interfaces.msg import Time
 from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy
@@ -50,8 +51,14 @@ class WorkspaceEnv(Node):
         self.blocks = copy.deepcopy(self.initial_blocks)
         
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-        
-        self.timer = self.create_timer(0.1, self.timer_callback)
+        # Pre-render markers at a fixed high resolution once; resize per frame.
+        # Generating markers at tiny/odd sizes fails intermittently -> visual glitches.
+        self._aruco_cache = {}
+        for i in range(4):
+            m = cv2.aruco.generateImageMarker(self.aruco_dict, i, 128)
+            self._aruco_cache[i] = cv2.cvtColor(m, cv2.COLOR_GRAY2BGR)
+
+        self.timer = self.create_timer(1.0 / 30.0, self.timer_callback)
         self.get_logger().info(f"Workspace Environment Initialized.")
 
     def prompt_callback(self, msg):
@@ -67,20 +74,22 @@ class WorkspaceEnv(Node):
         self.gripper_closed = msg.data
         
         if self.gripper_closed and not was_closed:
-            # Gripper just closed. Check if we are near a block
+            # Gripper just closed. Grab the NEAREST block within grasp radius.
+            # Blocks sit 5cm apart, so a 6cm "first-match" check could grab a neighbor.
             try:
+                tf = self.tf_buffer.lookup_transform('base_link', 'manipulator_link', rclpy.time.Time())
+                mx, my, mz = tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z
+                best_id, best_dist = None, 0.04
                 for block in self.blocks:
-                    tf = self.tf_buffer.lookup_transform('base_link', 'manipulator_link', rclpy.time.Time())
-                    mx, my, mz = tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z
                     bx, by, bz = block['pos'][0], block['pos'][1], block['pos'][2]
-                    
                     dist = math.sqrt((mx - bx)**2 + (my - by)**2 + (mz - bz)**2)
-                    if dist < 0.06: # 6cm grab radius
-                        self.grabbed_block = block['id']
-                        self.get_logger().info(f"Grabbed block {self.grabbed_block}")
-                        break
+                    if dist < best_dist:
+                        best_id, best_dist = block['id'], dist
+                if best_id is not None:
+                    self.grabbed_block = best_id
+                    self.get_logger().info(f"Grabbed block {self.grabbed_block}")
             except Exception as e:
-                pass
+                self.get_logger().warn(f"Grasp check failed: {e}", throttle_duration_sec=5.0)
         elif not self.gripper_closed and was_closed:
             # Gripper opened, release block
             if self.grabbed_block is not None:
@@ -97,8 +106,8 @@ class WorkspaceEnv(Node):
                     tf.transform.translation.y,
                     tf.transform.translation.z - 0.02 # hang slightly below
                 ]
-            except Exception:
-                pass
+            except Exception as e:
+                self.get_logger().warn(f"Grabbed-block TF lookup failed: {e}", throttle_duration_sec=5.0)
                 
         self.publish_markers_and_tf()
         self.render_synthetic_camera()
@@ -177,6 +186,7 @@ class WorkspaceEnv(Node):
                     v = int(cy + focal_length * (y / z)) # map Y to V (vertical down)
                     
                     size = int(focal_length * (0.04 / z))
+                    size = max(4, min(size, 224))  # clamp: avoid degenerate sizes near camera
                     if size > 0:
                         color = (int(block['color'][2]*255), int(block['color'][1]*255), int(block['color'][0]*255))
                         
@@ -190,8 +200,7 @@ class WorkspaceEnv(Node):
                             cv2.rectangle(img, (x1, y1), (x2, y2), color, -1)
                             
                             if self.use_aruco:
-                                marker_img = cv2.aruco.generateImageMarker(self.aruco_dict, block['id'], size)
-                                marker_img = cv2.cvtColor(marker_img, cv2.COLOR_GRAY2BGR)
+                                marker_img = cv2.resize(self._aruco_cache[block['id']], (size, size))
                                 
                                 # Crop marker image to fit within bounds
                                 mx1 = x1 - (u - size//2)
@@ -205,12 +214,20 @@ class WorkspaceEnv(Node):
                                 if roi.shape == marker_crop.shape and roi.size > 0:
                                     blended = cv2.addWeighted(roi, 0.3, marker_crop, 0.7, 0)
                                     img[y1:y2, x1:x2] = blended
-                except Exception:
-                    pass
+                except Exception as e:
+                    self.get_logger().warn(f"Render error for block {block['id']}: {e}", throttle_duration_sec=5.0)
             
             # Publish Image
+            # Backdate stamp slightly: robot_state_publisher TF (driven by joint_states)
+            # can be stamped marginally ahead of this node's clock, making RViz's
+            # message filter drop frames ("timestamp earlier than transform cache").
+            now = self.get_clock().now().to_msg()
+            total_ns = now.sec * 1_000_000_000 + now.nanosec - 50_000_000
+            stamp = Time()
+            stamp.sec = total_ns // 1_000_000_000
+            stamp.nanosec = total_ns % 1_000_000_000
             img_msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
-            img_msg.header.stamp = self.get_clock().now().to_msg()
+            img_msg.header.stamp = stamp
             img_msg.header.frame_id = "camera_link"
             self.image_pub.publish(img_msg)
             
