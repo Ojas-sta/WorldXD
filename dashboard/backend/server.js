@@ -30,59 +30,50 @@ let state = {
     totalDim: 400,
     cemConfig: {
       horizon: 5,
-      numSamples: 256,
-      iterations: 3,
-      numElites: 32,
+      numSamples: 64,     // live-loop reduced size (see stacking_controller.py)
+      iterations: 2,
       actionDim: 20
     },
-    lastInferenceMs: 31.5,
-    cemPlannerStatus: 'Running Rollouts'
+    lastInferenceMs: null,
+    cemPlannerStatus: 'Idle'
   },
   robotState: {
     eePos: [0.150, 0.000, 0.150],
     targetEePos: [0.250, 0.000, 0.020],
-    jointAngles: [0.0, -0.21, 0.45, -0.24],
-    jointAnglesDeg: [0.0, -12.0, 25.8, -13.8],
+    jointAngles: [0.0, 0.0, 0.0, 0.0],
+    jointAnglesDeg: [0.0, 0.0, 0.0, 0.0],
     gripperClosed: false,
     fsmState: 'DONE',
     stackedCount: 0,
     stackAll: false,
-    blocks: [
-      { id: 0, color: 'Red', pos: [0.25, 0.10, 0.02], status: 'Workspace' },
-      { id: 1, color: 'Green', pos: [0.25, -0.10, 0.02], status: 'Workspace' },
-      { id: 2, color: 'Blue', pos: [0.30, 0.10, 0.02], status: 'Workspace' },
-      { id: 3, color: 'Yellow', pos: [0.30, -0.10, 0.02], status: 'Workspace' }
-    ]
+    blocks: []            // filled from /workspace_blocks via ros_bridge.py
   },
   system: {
     cpuPercent: 12.4,
     ram: {
       totalGB: 16.0,
-      usedGB: 9.4,
-      freeGB: 6.6,
-      modelWeightsGB: 3.5,
-      latentCacheGB: 0.8,
-      systemAppsGB: 5.1,
-      readSpeedMBs: 42.5,
-      writeSpeedMBs: 18.2
+      usedGB: 0.0,
+      freeGB: 16.0,
+      readSpeedMBs: 0,
+      writeSpeedMBs: 0
     },
     swap: {
-      usedGB: 1.1,
+      usedGB: 0,
       totalGB: 8.0,
       status: 'Safe'
     },
     compute: {
-      gpuTflops: 2.8,
-      gpuTops: 11.4,
-      mpsUtilizationPercent: 48.0
+      gpuTflops: null,   // not measurable on Apple Silicon; do not fabricate
+      gpuTops: null,
+      mpsUtilizationPercent: null
     },
     activeProcesses: [],
     uptimeSec: os.uptime()
   },
   session: {
     activeProject: 'WorldXD',
-    lastPrompt: 'arrange all boxes',
-    opencodeStatus: 'Monitoring test_jepa.py',
+    lastPrompt: '',
+    cameraRes: null,
     logLines: []
   }
 };
@@ -97,11 +88,11 @@ function pollTelemetry() {
   const dt = Math.max((now - lastTick) / 1000, 0.1);
   lastTick = now;
 
-  // Process status check
+  // Process status check (trim to top 6 to optimize payload size)
   exec('ps aux | grep -E "python|ros|opencode|launch_robot|stacking_controller|test_jepa" | grep -v grep', (err, stdout) => {
     if (!err && stdout) {
       const lines = stdout.trim().split('\n');
-      const processes = lines.map(line => {
+      const processes = lines.slice(0, 6).map(line => {
         const parts = line.trim().split(/\s+/);
         const pid = parts[1];
         const cpu = parseFloat(parts[2]) || 0;
@@ -117,7 +108,7 @@ function pollTelemetry() {
         else if (cmd.includes('robot_state_publisher')) label = 'Robot State Publisher';
         else if (cmd.includes('opencode')) label = 'OpenCode Agent';
 
-        return { pid, cpu, mem, cmd: cmd.slice(0, 70), label };
+        return { pid, cpu, mem, cmd: cmd.slice(0, 50), label };
       });
       state.system.activeProcesses = processes;
 
@@ -136,7 +127,6 @@ function pollTelemetry() {
   state.system.ram.usedGB = Math.round(usedMemGB * 10) / 10;
   state.system.ram.freeGB = Math.round(freeMemGB * 10) / 10;
 
-  // Breakdown calculation
   state.system.ram.modelWeightsGB = 3.5;
   state.system.ram.latentCacheGB = 0.8;
   state.system.ram.systemAppsGB = Math.max(0, Math.round((usedMemGB - 4.3) * 10) / 10);
@@ -162,36 +152,66 @@ function pollTelemetry() {
     }
   });
 
-  // Compute TFLOPS fluctuation for MPS visualizer
-  const activityFactor = (state.system.cpuPercent / 100);
-  state.system.compute.gpuTflops = Math.round((1.2 + activityFactor * 3.2) * 10) / 10;
-  state.system.compute.gpuTops = Math.round((8.0 + activityFactor * 10.0) * 10) / 10;
-
-  // Dynamically update robot EE position if active
-  if (state.robotState.fsmState !== 'DONE') {
-    state.robotState.eePos[0] += (Math.random() - 0.5) * 0.004;
-    state.robotState.eePos[1] += (Math.random() - 0.5) * 0.004;
-    state.robotState.eePos[2] += (Math.random() - 0.5) * 0.002;
-  }
-
-  // Fetch log lines
-  const logDir = path.join(os.homedir(), '.gemini/antigravity/brain/f717828c-89fc-474e-8646-6cd039d34e8c/.system_generated/tasks');
-  if (fs.existsSync(logDir)) {
-    try {
-      const files = fs.readdirSync(logDir).filter(f => f.endsWith('.log'));
-      if (files.length > 0) {
-        const latestFile = path.join(logDir, files[files.length - 1]);
-        const content = fs.readFileSync(latestFile, 'utf8');
-        const lines = content.trim().split('\n').slice(-15);
-        state.session.logLines = lines;
-      }
-    } catch (e) {}
-  }
+  // GPU compute figures are NOT measurable on Apple Silicon from userspace;
+  // left as null so the UI renders "n/a" instead of fabricated numbers.
+  state.system.compute.gpuTflops = null;
+  state.system.compute.gpuTops = null;
 
   io.emit('telemetry', state);
 }
 
-setInterval(pollTelemetry, 500);
+// 800ms interval for optimal network & UI render smoothness
+setInterval(pollTelemetry, 800);
+
+// ---------------------------------------------------------------------------
+// ROS relay endpoints (fed by dashboard/backend/ros_bridge.py)
+// ---------------------------------------------------------------------------
+let latestCameraJpeg = null;
+let lastFsmStamp = 0;
+
+app.post('/ros/state', (req, res) => {
+  const d = req.body || {};
+  if (Array.isArray(d.jointAngles)) {
+    state.robotState.jointAngles = d.jointAngles;
+    state.robotState.jointAnglesDeg = d.jointAngles.map(a => Math.round(a * 180 / Math.PI * 10) / 10);
+  }
+  if (typeof d.gripperClosed === 'boolean') state.robotState.gripperClosed = d.gripperClosed;
+  if (typeof d.fsmState === 'string') {
+    // Snapshots stream at 30Hz and HTTP can reorder them; only accept FSM
+    // updates carrying a strictly newer timestamp.
+    const stamp = typeof d.fsmStamp === 'number' ? d.fsmStamp : Date.now();
+    if (stamp > lastFsmStamp) {
+      lastFsmStamp = stamp;
+      if (d.fsmState !== state.robotState.fsmState) {
+        pushLog(`FSM -> ${d.fsmState}`);
+      }
+      state.robotState.fsmState = d.fsmState;   // real state from controller
+    }
+  }
+  if (d.lastInferenceMs != null) {
+    state.jepaModel.lastInferenceMs = d.lastInferenceMs;
+    state.jepaModel.cemPlannerStatus = 'Planning (CEM)';
+  }
+  if (Array.isArray(d.blocks)) state.robotState.blocks = d.blocks;
+  if (Array.isArray(d.imageRes)) state.session.cameraRes = d.imageRes;
+  res.json({ ok: true });
+});
+
+app.post('/ros/camera', (req, res) => {
+  latestCameraJpeg = req.body && req.body.jpeg ? req.body.jpeg : null;
+  if (latestCameraJpeg) io.emit('camera', latestCameraJpeg);  // out-of-band: big payload
+  res.json({ ok: true });
+});
+
+app.get('/api/camera', (req, res) => {
+  res.json({ jpeg: latestCameraJpeg });
+});
+
+function pushLog(line) {
+  const stamp = new Date().toLocaleTimeString();
+  state.session.logLines.push(`[${stamp}] ${line}`);
+  state.session.logLines = state.session.logLines.slice(-15);
+}
 
 // API Routes
 app.get('/api/state', (req, res) => {
@@ -204,20 +224,15 @@ app.post('/api/prompt', (req, res) => {
 
   console.log(`Received prompt from Dashboard: ${prompt}`);
   state.session.lastPrompt = prompt;
+  pushLog(`Prompt: "${prompt}"`);
 
-  const text = prompt.toLowerCase();
-  if (text.includes('reset')) {
-    state.robotState.fsmState = 'DONE';
-    state.robotState.stackedCount = 0;
-    state.robotState.stackAll = false;
-  } else if (text.includes('arrange') || text.includes('all')) {
-    state.robotState.fsmState = 'IDENTIFY';
-    state.robotState.stackAll = true;
-  } else {
-    state.robotState.fsmState = 'MOVE_TO_BLOCK';
-  }
-
-  exec(`ros2 topic pub --once /user_prompt std_msgs/msg/String "{data: '${prompt}'}"`, (err) => {});
+  // NOTE: FSM state is owned by the controller now (/fsm_state via relay);
+  // we no longer guess transitions here.
+  // ros2 only exists inside the pixi env -> must route through pixi.
+  exec(`pixi run ros2 topic pub --once /user_prompt std_msgs/msg/String "{data: '${prompt}'}"`,
+       { cwd: path.join(__dirname, '..', '..') }, (err) => {
+    if (err) console.error('Prompt publish failed:', err.message);
+  });
 
   io.emit('telemetry', state);
   res.json({ success: true, message: `Prompt '${prompt}' broadcasted.` });

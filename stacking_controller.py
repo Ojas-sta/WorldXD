@@ -3,6 +3,7 @@ from rclpy.node import Node
 import math
 import re
 import threading
+import time
 import numpy as np
 from cv_bridge import CvBridge
 
@@ -11,7 +12,7 @@ import torchvision.transforms as transforms
 from jepa_model import JEPAWorldModel
 
 from sensor_msgs.msg import Image, JointState
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, Float32
 from tf2_ros import Buffer, TransformListener
 
 COLOR_TO_ID = {'red': 0, 'green': 1, 'blue': 2, 'yellow': 3}
@@ -25,8 +26,11 @@ class StackingController(Node):
 
         self.joint_pub = self.create_publisher(JointState, 'joint_states', 10)
         self.gripper_pub = self.create_publisher(Bool, '/gripper_closed', 10)
+        self.fsm_pub = self.create_publisher(String, 'fsm_state', 10)
+        self.jepa_telemetry_pub = self.create_publisher(Float32, 'jepa_telemetry', 10)
         self.camera_sub = self.create_subscription(Image, '/camera/image_raw', self.image_callback, 10)
         self.prompt_sub = self.create_subscription(String, 'user_prompt', self.prompt_callback, 10)
+        self._last_fsm_published = None
 
         self.bridge = CvBridge()
 
@@ -160,8 +164,13 @@ class StackingController(Node):
                 continue
             try:
                 img_tensor = self.transform(frame).unsqueeze(0).to(self.device)
+                t0 = time.perf_counter()
                 with torch.no_grad():
                     action = self.model.get_action(img_tensor, self.goal_tensor)
+                # Real inference latency for dashboard/CLI telemetry
+                tele = Float32()
+                tele.data = (time.perf_counter() - t0) * 1000.0
+                self.jepa_telemetry_pub.publish(tele)
                 self.latest_action = action
             except Exception as e:
                 self.get_logger().warn(f"JEPA inference error: {e}")
@@ -287,6 +296,13 @@ class StackingController(Node):
         self.current_ee[0] = max(min(self.current_ee[0], 0.30), 0.05)
         self.current_ee[1] = max(min(self.current_ee[1], 0.30), -0.30)
         self.current_ee[2] = max(min(self.current_ee[2], 0.30), 0.02)
+
+        # Publish FSM state on transition (for dashboard/CLI telemetry)
+        if self.state != self._last_fsm_published:
+            self._last_fsm_published = self.state
+            fsm_msg = String()
+            fsm_msg.data = self.state
+            self.fsm_pub.publish(fsm_msg)
 
         # IK with joint velocity limiting
         target_angles = self.solve_ik(*self.current_ee)
