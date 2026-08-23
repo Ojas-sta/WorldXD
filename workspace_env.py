@@ -28,7 +28,11 @@ class WorkspaceEnv(Node):
         # Subscriber
         self.gripper_sub = self.create_subscription(Bool, '/gripper_closed', self.gripper_callback, 10)
         from std_msgs.msg import String
+        from geometry_msgs.msg import PointStamped
         self.prompt_sub = self.create_subscription(String, 'user_prompt', self.prompt_callback, 10)
+        # Manual block drags from the RViz interactive markers (manual_marker.py)
+        self.block_move_sub = self.create_subscription(
+            PointStamped, '/block_move', self.block_move_callback, 10)
         
         self.gripper_closed = False
         self.grabbed_block = None
@@ -60,6 +64,24 @@ class WorkspaceEnv(Node):
 
         self.timer = self.create_timer(1.0 / 30.0, self.timer_callback)
         self.get_logger().info(f"Workspace Environment Initialized.")
+
+    def block_move_callback(self, msg):
+        """Drag updates from manual_marker: relocate the named block.
+
+        Refuses while the arm is carrying that block (position is owned by
+        the gripper TF until released).
+        """
+        try:
+            bid = int(msg.header.frame_id.replace('block_', ''))
+        except ValueError:
+            return
+        if self.grabbed_block == bid:
+            return
+        self.blocks[bid]['pos'] = [
+            max(min(msg.point.x, 0.35), 0.05),
+            max(min(msg.point.y, 0.30), -0.30),
+            max(msg.point.z, 0.02),
+        ]
 
     def prompt_callback(self, msg):
         import copy
