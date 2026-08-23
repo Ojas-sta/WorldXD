@@ -336,6 +336,50 @@ a full terminal control center. Fabricated metrics are gone — unknowns render 
 
 ---
 
+# P3.1 — Manual control add-ons: EE jog + draggable blocks (interactive markers)
+
+**Commits:** [`see git log`](https://github.com/Ojas-sta/WorldXD/commits/main) · 2026-08-23
+
+## ① Plan
+
+User requested manual manipulation in RViz: drag a marker to move the arm, and drag the
+dummy blocks directly. Constraints: joint_states must stay single-writer; block state is
+owned by workspace_env.
+
+## ② Implementation
+
+- **`manual_marker.py`** — cyan sphere marker streams `/ee_target` while dragged
+  (controller follows in MANUAL state); one colored cube per block streams `/block_move`
+  (PointStamped with `frame_id=block_<id>`). Block markers re-sync to authoritative state
+  except the specific marker mid-drag (1.5s grace), so arm-carries and resets stay
+  consistent. Context menu toggles gripper during MANUAL.
+- **`stacking_controller.py`** — MANUAL state tracks the live drag target at ee_speed;
+  any task prompt/reset exits. Gripper obeys `/manual_gripper` only while MANUAL.
+- **`workspace_env.py`** — `/block_move` relocates blocks, clamped to table bounds;
+  refused while the arm carries that block.
+- **UI:** MANUAL appears as a mode chip in dashboard FsmPipeline and wxd TUI.
+- **launch_robot.py / rviz config** updated to spawn + display the markers.
+
+## ③ Test & Verification
+
+```
+BEFORE: {0: (0.15, 0.1, 0.02), 1: (0.2, 0.1, 0.02), 2: (0.15, -0.1, 0.02), 3: (0.2, -0.1, 0.02)}
+AFTER:  {0: (0.15, 0.1, 0.02), 1: (0.2, 0.1, 0.02), 2: (0.28, -0.18, 0.02), 3: (0.2, -0.1, 0.02)}
+DRAG TEST: PASS          ← simulated /block_move stream relocated exactly block 2
+
+controller: MANUAL jog engaged (marker drag).      ← EE jog engages on drag
+dashboard log: FSM -> MANUAL ... FSM -> DONE       ← exits cleanly on reset prompt
+wxd/dashboard show MANUAL chip live
+```
+
+## ④ Overview
+
+The arm can now be jogged by hand in RViz (dragging the cyan target), the gripper toggled
+from the marker context menu, and any dummy block picked up and moved by dragging its
+cube — with the simulation state, camera feed, dashboard and TUI all staying consistent.
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
