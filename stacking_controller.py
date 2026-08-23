@@ -38,6 +38,7 @@ class StackingController(Node):
         self.manual_gripper_sub = self.create_subscription(
             Bool, '/manual_gripper', self.manual_gripper_callback, 10)
         self._last_fsm_published = None
+        self.last_ee_msg_time = 0.0
 
         self.bridge = CvBridge()
 
@@ -194,6 +195,7 @@ class StackingController(Node):
         if self.state not in ('DONE', 'MANUAL'):
             return
         self.manual_target = [msg.point.x, msg.point.y, msg.point.z]
+        self.last_ee_msg_time = time.monotonic()
         if self.state != 'MANUAL':
             self.queue = []
             self.state = 'MANUAL'
@@ -261,9 +263,16 @@ class StackingController(Node):
 
         elif self.state == 'MANUAL':
             # Track the interactive-marker target live (it moves under the drag).
-            t = getattr(self, 'manual_target', None)
-            if t is not None:
-                self._goto(t[0], t[1], t[2])
+            # P3.6.2: MANUAL times out 3s after the last drag message so a stale
+            # jog target can't make the arm wander through the scene later.
+            if time.monotonic() - self.last_ee_msg_time > 3.0:
+                self.get_logger().info('MANUAL timed out (no drag input).')
+                self.state = 'RETREAT'
+                self.state_ticks = 0
+            else:
+                t = getattr(self, 'manual_target', None)
+                if t is not None:
+                    self._goto(t[0], t[1], t[2])
 
         elif self.state == 'MOVE_ABOVE_BLOCK':
             p = self._block_pos(self.pick_block_id)

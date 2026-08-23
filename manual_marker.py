@@ -212,7 +212,10 @@ class ManualMarker(Node):
 
     def on_blocks_state(self, msg: MarkerArray):
         """Re-pose block markers from authoritative state, except while dragging."""
-        fresh_drag = time.monotonic() - self._last_drag_time < 1.5
+        # P3.6.2 fix (B2): keep in sync with workspace_env.DRAG_GRACE (0.35s)
+        # + small margin, so the marker never fights a block that is already
+        # falling under physics.
+        fresh_drag = time.monotonic() - self._last_drag_time < 0.45
         changed = False
         for mkr in msg.markers:
             name = f'jog_block_{mkr.id}'

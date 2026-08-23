@@ -188,12 +188,25 @@ class WorkspaceEnv(Node):
         total = min(1.0, sum(c[1] for c in group))
 
         if total < self.MIN_SUPPORT_FRAC:
+            # P3.6.2 fix (B1): guarantee a usable slide direction. A symmetric
+            # straddle can place the centroid exactly under our center
+            # (n ~= 0), which previously yielded slide=None and let an
+            # under-supported block float forever.
             wsum = sum(c[1] for c in group)
             cx = sum(c[1] * c[2] for c in group) / wsum
             cy = sum(c[1] * c[3] for c in group) / wsum
             dx, dy = bx - cx, by - cy
             n = (dx * dx + dy * dy) ** 0.5
-            slide = ((dx / n, dy / n) if n > 1e-6 else None)
+            if n > 1e-6:
+                slide = (dx / n, dy / n)
+            else:
+                # fall back to direction away from nearest supporter edge;
+                # final fallback: +x so the block always resolves
+                nearest = min(group,
+                              key=lambda c: (c[2] - bx) ** 2 + (c[3] - by) ** 2)
+                dx, dy = bx - nearest[2], by - nearest[3]
+                n = (dx * dx + dy * dy) ** 0.5
+                slide = ((dx / n, dy / n) if n > 1e-6 else (1.0, 0.0))
             return (top, total, slide)
         return (top, total, None)
 
@@ -216,15 +229,21 @@ class WorkspaceEnv(Node):
             sup_z, frac, slide = self._support_for(b)
             rest_z = sup_z + self.BLOCK_HALF
             z = b['pos'][2]
-            if z > rest_z + 0.001:
-                # airborne: accelerate downward
+            if frac < self.MIN_SUPPORT_FRAC:
+                # P3.6.2: genuinely under-supported -> TIP OFF, don't surf.
+                # Slide out while gravity pulls down, so the block drops into
+                # the gap (or onto a lower surface) instead of skating across
+                # supporter tops onto the neighbouring block.
+                self._vel[bid] += self.GRAVITY * dt
+                b['pos'][2] = max(self.TABLE_Z + self.BLOCK_HALF,
+                                  z - self._vel[bid] * dt)
+                if slide is not None:
+                    b['pos'][0] += slide[0] * self.TUMBLE_SLIDE * dt
+                    b['pos'][1] += slide[1] * self.TUMBLE_SLIDE * dt
+            elif z > rest_z + 0.001:
+                # airborne above a valid support: accelerate downward
                 self._vel[bid] += self.GRAVITY * dt
                 b['pos'][2] = max(rest_z, z - self._vel[bid] * dt)
-            elif slide is not None:
-                # P3.6: resting but <50% of footprint supported -> tumble off
-                b['pos'][0] += slide[0] * self.TUMBLE_SLIDE * dt
-                b['pos'][1] += slide[1] * self.TUMBLE_SLIDE * dt
-                self._vel[bid] = 0.0
             elif z < rest_z - 0.001:
                 # intersecting the support column (dragged into it): push up
                 b['pos'][2] = rest_z
