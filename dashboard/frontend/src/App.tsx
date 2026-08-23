@@ -8,33 +8,43 @@ import { Visualizer } from './components/Visualizer';
 import { SystemCard } from './components/SystemCard';
 import { ControlPanel } from './components/ControlPanel';
 import { LogStream } from './components/LogStream';
+import { CameraFeed } from './components/CameraFeed';
+import { FsmPipeline } from './components/FsmPipeline';
 import { TelemetryState, SystemMetrics } from './types';
 
 const SOCKET_URL = 'http://localhost:4002';
 
+// Real FSM states published by stacking_controller.py on /fsm_state
+const FSM_ORDER = [
+  'MOVE_ABOVE_BLOCK', 'DESCEND', 'CLOSE_GRIPPER', 'LIFT',
+  'MOVE_ABOVE_STACK', 'PLACE', 'OPEN_GRIPPER', 'RETREAT'
+];
+
 export function App() {
   const [connected, setConnected] = useState(false);
   const [telemetry, setTelemetry] = useState<TelemetryState | null>(null);
+  const [socket, setSocket] = useState<ReturnType<typeof io> | null>(null);
 
   useEffect(() => {
-    const socket = io(SOCKET_URL, {
+    const s = io(SOCKET_URL, {
       transports: ['websocket', 'polling']
     });
 
-    socket.on('connect', () => {
+    s.on('connect', () => {
       setConnected(true);
     });
 
-    socket.on('disconnect', () => {
+    s.on('disconnect', () => {
       setConnected(false);
     });
 
-    socket.on('telemetry', (data: TelemetryState) => {
+    s.on('telemetry', (data: TelemetryState) => {
       setTelemetry(data);
     });
 
+    setSocket(s);
     return () => {
-      socket.disconnect();
+      s.disconnect();
     };
   }, []);
 
@@ -59,8 +69,8 @@ export function App() {
     visualDim: 384,
     proprioDim: 16,
     totalDim: 400,
-    cemConfig: { horizon: 5, numSamples: 256, iterations: 3, numElites: 32, actionDim: 20 },
-    lastInferenceMs: 31.5,
+    cemConfig: { horizon: 5, numSamples: 64, iterations: 2, numElites: 8, actionDim: 20 },
+    lastInferenceMs: null as unknown as number,
     cemPlannerStatus: 'Active'
   };
 
@@ -119,9 +129,10 @@ export function App() {
         transition={springTransition}
         style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: '20px' }}
       >
-        {/* Left Column - Model & System Stats (4 cols) */}
+        {/* Left Column - Model, System Stats & Camera (4 cols) */}
         <div style={{ gridColumn: 'span 4', display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <ModelCard model={defaultModel} />
+          <CameraFeed socket={socket} resolution={telemetry?.session.cameraRes ?? null} />
           <SystemCard system={defaultSystem} />
         </div>
 
@@ -132,7 +143,9 @@ export function App() {
             <Visualizer robot={defaultRobot} />
           </div>
 
-          <ControlPanel onSendPrompt={handleSendPrompt} lastPrompt={telemetry?.session.lastPrompt || 'arrange all boxes'} />
+          <FsmPipeline current={defaultRobot.fsmState} order={FSM_ORDER} />
+
+          <ControlPanel onSendPrompt={handleSendPrompt} lastPrompt={telemetry?.session.lastPrompt || ''} />
 
           <LogStream logs={telemetry?.session.logLines || []} />
         </div>

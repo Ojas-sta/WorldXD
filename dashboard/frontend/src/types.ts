@@ -82,7 +82,7 @@ export interface SystemMetrics {
 export interface SessionData {
   activeProject: string;
   lastPrompt: string;
-  opencodeStatus: string;
+  cameraRes: [number, number] | null;
   logLines: string[];
 }
 
