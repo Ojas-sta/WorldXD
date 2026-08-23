@@ -69,6 +69,12 @@ class WorkspaceEnv(Node):
         self.TABLE_Z = 0.0      # table SURFACE height; block centers rest at 0.02
         self.GRAVITY = 2.5      # m/s^2, scaled down so falls read at 30Hz
         self.DRAG_GRACE = 0.35  # s of kinematic hold after a drag message
+        # P3.6: support rule + arm collision
+        self.MIN_SUPPORT_FRAC = 0.5   # <50% footprint supported => tumble off
+        self.TUMBLE_SLIDE = 0.04      # m/s lateral slide while unsupported
+        self.GRIPPER_RADIUS = 0.055   # zone around manipulator_link exempt from
+                                      # collision: touching there = pickup attempt
+        self.ARM_MARGIN = 0.008       # link-vs-block clearance
 
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
         # Pre-render markers at a fixed high resolution once; resize per frame.
@@ -146,24 +152,41 @@ class WorkspaceEnv(Node):
             self.grabbed_block = None
 
     # ------------------------------------------------------------- P3.5 physics
-    def _support_height(self, block):
-        """Highest resting surface (table or block top) under this block."""
-        support = self.TABLE_Z
+    def _support_for(self, block):
+        """Best support under a block.
+
+        Returns (surface_z, supported_fraction, slide_dir):
+        - surface_z: highest candidate surface with any XY overlap
+        - supported_fraction: overlap of footprints vs block area (table = 1.0)
+        - slide_dir: unit vector pointing off the supporter's edge, set when
+          the fraction is below MIN_SUPPORT_FRAC (block should tumble)
+        """
+        H = 2 * self.BLOCK_HALF
         bx, by, bz = block['pos']
+        best = (self.TABLE_Z, 1.0, None)
         for other in self.blocks:
             if other is block:
                 continue
             ox, oy, oz = other['pos']
-            xy_overlap = (abs(bx - ox) < 2 * self.BLOCK_HALF - 0.002 and
-                          abs(by - oy) < 2 * self.BLOCK_HALF - 0.002)
+            dx, dy = bx - ox, by - oy
+            fx = H - abs(dx)
+            fy = H - abs(dy)
+            if fx <= 0 or fy <= 0:
+                continue  # no footprint overlap
             o_top = oz + self.BLOCK_HALF
-            # Only count surfaces at or below our center (no telekinetic shelves)
-            if xy_overlap and o_top <= bz + 0.005 and o_top > support:
-                support = o_top
-        return support
+            if o_top > bz + 0.005:
+                continue  # surface is above our center: not a support
+            frac = (fx * fy) / (H * H)
+            if o_top > best[0]:
+                n = (dx * dx + dy * dy) ** 0.5
+                slide = ((dx / n, dy / n) if n > 1e-6 else None) if frac < self.MIN_SUPPORT_FRAC else None
+                best = (o_top, frac, slide)
+        return best
 
     def physics_step(self):
-        """Gravity + stacking: free blocks fall until they rest on something."""
+        """Gravity + stacking + tumble: free blocks fall until they rest on a
+        surface that supports at least half their footprint; less than that
+        and they slide off the edge before dropping."""
         import time as _time
         now = _time.monotonic()
         dt = min(now - self._last_physics, 0.1)
@@ -176,12 +199,18 @@ class WorkspaceEnv(Node):
                 continue
             if now - self._last_move.get(bid, 0.0) < self.DRAG_GRACE:
                 continue  # held by a live hand-drag: kinematic
-            rest_z = self._support_height(b) + self.BLOCK_HALF
+            sup_z, frac, slide = self._support_for(b)
+            rest_z = sup_z + self.BLOCK_HALF
             z = b['pos'][2]
             if z > rest_z + 0.001:
                 # airborne: accelerate downward
                 self._vel[bid] += self.GRAVITY * dt
                 b['pos'][2] = max(rest_z, z - self._vel[bid] * dt)
+            elif slide is not None:
+                # P3.6: resting but <50% of footprint supported -> tumble off
+                b['pos'][0] += slide[0] * self.TUMBLE_SLIDE * dt
+                b['pos'][1] += slide[1] * self.TUMBLE_SLIDE * dt
+                self._vel[bid] = 0.0
             elif z < rest_z - 0.001:
                 # intersecting the support column (dragged into it): push up
                 b['pos'][2] = rest_z
@@ -189,6 +218,74 @@ class WorkspaceEnv(Node):
             else:
                 b['pos'][2] = rest_z
                 self._vel[bid] = 0.0
+
+    # ------------------------------------------------- P3.6 arm-block collision
+    def _arm_segments(self):
+        """Sampled points along the arm links (base -> tip), from TF."""
+        chain = ['shoulder_link', 'lower_arm_link', 'upper_arm_link',
+                 'manipulator_link']
+        pts = []
+        prev = (0.0, 0.0, 0.0)  # base_link origin
+        for frame in chain:
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    'base_link', frame, rclpy.time.Time())
+            except Exception:
+                return None
+            p = (tf.transform.translation.x,
+                 tf.transform.translation.y,
+                 tf.transform.translation.z)
+            pts.append((prev, p))
+            prev = p
+        return pts, prev
+
+    def arm_collision_step(self):
+        """Shove blocks aside when a non-gripper link sweeps through them.
+
+        The gripper zone around manipulator_link is exempt: contact there is
+        the pickup mechanism (proximity grab), not a collision.
+        """
+        result = self._arm_segments()
+        if result is None:
+            return
+        segments, tip = result
+        H = self.BLOCK_HALF + self.ARM_MARGIN
+
+        for seg_a, seg_b in segments:
+            for k in range(7):
+                t = k / 6.0
+                px = seg_a[0] + (seg_b[0] - seg_a[0]) * t
+                py = seg_a[1] + (seg_b[1] - seg_a[1]) * t
+                pz = seg_a[2] + (seg_b[2] - seg_a[2]) * t
+                # gripper-zone exemption
+                d_tip_sq = ((px - tip[0]) ** 2 + (py - tip[1]) ** 2 +
+                            (pz - tip[2]) ** 2)
+                if d_tip_sq < self.GRIPPER_RADIUS ** 2:
+                    continue
+                for b in self.blocks:
+                    if self.grabbed_block == b['id']:
+                        continue
+                    bx, by, bz = b['pos']
+                    # closest point on the block AABB to the sample point
+                    cx = max(bx - H, min(px, bx + H))
+                    cy = max(by - H, min(py, by + H))
+                    cz = max(bz - H, min(pz, bz + H))
+                    dx, dy, dz = px - cx, py - cy, pz - cz
+                    dist_sq = dx * dx + dy * dy + dz * dz
+                    if dist_sq >= self.ARM_MARGIN ** 2:
+                        continue
+                    # push horizontally away from the link sample point
+                    n_xy = (bx - px, by - py)
+                    norm = (n_xy[0] ** 2 + n_xy[1] ** 2) ** 0.5
+                    if norm < 1e-6:
+                        n_xy = (bx, by)
+                        norm = (bx * bx + by * by) ** 0.5 or 1.0
+                    push = min(0.012, (self.ARM_MARGIN - dist_sq ** 0.5) + 0.002)
+                    b['pos'][0] += n_xy[0] / norm * push
+                    b['pos'][1] += n_xy[1] / norm * push
+                    self.get_logger().info(
+                        f"Arm nudged block {b['id']} aside",
+                        throttle_duration_sec=3.0)
 
     def timer_callback(self):
         # Update grabbed block position
@@ -204,6 +301,7 @@ class WorkspaceEnv(Node):
                 self.get_logger().warn(f"Grabbed-block TF lookup failed: {e}", throttle_duration_sec=5.0)
 
         self.physics_step()
+        self.arm_collision_step()
         self.publish_markers_and_tf()
         self.render_synthetic_camera()
 
