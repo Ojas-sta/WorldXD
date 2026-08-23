@@ -19,6 +19,8 @@ ros-humble-interactive-markers = "*"
 ros-humble-rviz2 = "*"
 ros-humble-xacro = "*"
 [pypi-dependencies]
+textual = "*"
+rich = "*"
 huggingface_hub = "*"
 timm = "*"
 einops = "*"
@@ -53,3 +55,4 @@ clusterscope = "*"
 
 [tasks]
 jepa-run = "python3 jepa_ros_bridge.py"
+wxd = "python3 wxd.py"
