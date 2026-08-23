@@ -532,6 +532,54 @@ the edge of whatever is beneath them.
 
 ---
 
+# P3.6.1 — Fix: blocks placed on a two-block diagonal slid onto one supporter
+
+**Commit:** [`see git log`](https://github.com/Ojas-sta/WorldXD/commits/main) · 2026-08-23 18:00
+
+## ① Plan
+
+User report (P3.6 follow-up): "Place one of the blocks on the diagonal between the
+corners of two blocks. It goes to the other block." Record the bug, then fix.
+
+## ② Root cause + Implementation
+
+`_support_for` evaluated each supporter **individually**: a block straddling the shared
+diagonal corner of two blocks had 25% overlap with each — under the 50% rule it was told
+to slide away from whichever supporter was evaluated first, and promptly climbed onto the
+other one.
+
+Fix in `workspace_env.py::_support_for`:
+- Supporters whose tops are within **3mm** of the highest contact are grouped; their
+  footprint fractions are **summed** (capped at 100%). 25% + 25% = 50% → stable.
+- When still <50%, the slide direction now points away from the **support centroid**
+  (overlap-area-weighted) rather than away from a single block's center.
+
+## ③ Test & Verification
+
+**OLD log (bug reproduced pre-fix):**
+```
+supporters: {0: (0.24, -0.06, 0.02), 3: (0.2, -0.1, 0.02)}   ← red & yellow corner-touching
+diagonal placement: blue -> (0.199, -0.101, 0.06)
+OLD BEHAVIOR: BUG REPRODUCED - slid/fell away                 ← blue climbed onto yellow
+```
+
+**NEW logs (post-fix):**
+```
+--- T1: DIAGONAL CORNER BRIDGE (25%+25% combined) ---
+blue stays bridged: (0.22, -0.08, 0.06) -> PASS               ← exactly where placed
+--- T2: REGRESSION - single-support tumble still works ---
+red tumbled: (0.241, -0.1, 0.02) -> PASS
+--- T3: REGRESSION - near-center stack still stable ---
+red stacked steady: (0.21, -0.1, 0.06) -> PASS
+```
+
+## ④ Overview
+
+Corner-junction balancing works: a block spanning two equal-height supporters stays put,
+while genuinely unsupported configurations still tumble — no behavior regressed.
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
