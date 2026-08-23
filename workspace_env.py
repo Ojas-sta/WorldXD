@@ -153,17 +153,20 @@ class WorkspaceEnv(Node):
 
     # ------------------------------------------------------------- P3.5 physics
     def _support_for(self, block):
-        """Best support under a block.
+        """Best combined support under a block.
 
+        Supporters whose tops sit within tolerance of the highest contact are
+        GROUPED (P3.6.1): a block straddling the diagonal corner of two blocks
+        has 25% on each — individually unstable, but 50% combined = stable.
         Returns (surface_z, supported_fraction, slide_dir):
-        - surface_z: highest candidate surface with any XY overlap
-        - supported_fraction: overlap of footprints vs block area (table = 1.0)
-        - slide_dir: unit vector pointing off the supporter's edge, set when
-          the fraction is below MIN_SUPPORT_FRAC (block should tumble)
+        - surface_z: common height of the highest contact group
+        - supported_fraction: summed footprint overlap vs block area
+        - slide_dir: unit vector away from the support centroid when the
+          fraction is below MIN_SUPPORT_FRAC
         """
         H = 2 * self.BLOCK_HALF
         bx, by, bz = block['pos']
-        best = (self.TABLE_Z, 1.0, None)
+        candidates = []  # (top_z, frac, ox, oy)
         for other in self.blocks:
             if other is block:
                 continue
@@ -172,16 +175,27 @@ class WorkspaceEnv(Node):
             fx = H - abs(dx)
             fy = H - abs(dy)
             if fx <= 0 or fy <= 0:
-                continue  # no footprint overlap
+                continue
             o_top = oz + self.BLOCK_HALF
             if o_top > bz + 0.005:
-                continue  # surface is above our center: not a support
-            frac = (fx * fy) / (H * H)
-            if o_top > best[0]:
-                n = (dx * dx + dy * dy) ** 0.5
-                slide = ((dx / n, dy / n) if n > 1e-6 else None) if frac < self.MIN_SUPPORT_FRAC else None
-                best = (o_top, frac, slide)
-        return best
+                continue
+            candidates.append((o_top, (fx * fy) / (H * H), ox, oy))
+        if not candidates:
+            return (self.TABLE_Z, 1.0, None)
+
+        top = max(c[0] for c in candidates)
+        group = [c for c in candidates if abs(c[0] - top) <= 0.003]
+        total = min(1.0, sum(c[1] for c in group))
+
+        if total < self.MIN_SUPPORT_FRAC:
+            wsum = sum(c[1] for c in group)
+            cx = sum(c[1] * c[2] for c in group) / wsum
+            cy = sum(c[1] * c[3] for c in group) / wsum
+            dx, dy = bx - cx, by - cy
+            n = (dx * dx + dy * dy) ** 0.5
+            slide = ((dx / n, dy / n) if n > 1e-6 else None)
+            return (top, total, slide)
+        return (top, total, None)
 
     def physics_step(self):
         """Gravity + stacking + tumble: free blocks fall until they rest on a
