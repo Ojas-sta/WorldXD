@@ -17,7 +17,7 @@ Each milestone below is documented in 4 parts: **① Plan → ② Implementation
 | P0 | Verify JEPA-WMS CEM planner fixes end-to-end | ✅ Done — 2026-08-23 |
 | P1 | Fix glitchy synthetic camera feed + frozen-arm bugs | ✅ Done — 2026-08-23 |
 | P2 | Add `/camera/camera_info` publisher | ✅ Pre-existing (doc was stale) |
-| P3 | Stack-boxes UI (buttons in prompt GUI) | ⬜ Not started |
+| P3 | Stack-boxes UI: dashboard truth-fix, prompt buttons, camera feed, wxd CLI | ✅ Done — 2026-08-23 |
 | P4 | Close the loop: JEPA drives joints directly | ⬜ Not started |
 | P5 | CEM performance optimization (~14s → real-time) | ⬜ Not started |
 | P6 | Real hardware bridge (NEMA17 steppers + SG90 servo) | 🆕 Proposed |
@@ -213,13 +213,137 @@ history needed before risky refactors.
 
 ---
 
+# P3 — Control UI: Dashboard truth-fix, prompt buttons, camera feed, wxd TUI
+
+**Commits:** [`a983621`](https://github.com/Ojas-sta/WorldXD/commit/a983621) (design scheme) ·
+[`4e99f06`](https://github.com/Ojas-sta/WorldXD/commit/4e99f06) (backend relay) ·
+[`11a0dcf`](https://github.com/Ojas-sta/WorldXD/commit/11a0dcf) (frontend) ·
+[`4c9eb74`](https://github.com/Ojas-sta/WorldXD/commit/4c9eb74) (CLI) · 2026-08-23
+
+## ① Plan
+
+Original P3 ("buttons in the prompt GUI") was expanded by user request after a dashboard
+audit revealed the existing React+Express dashboard was **mostly fake**: EE position was
+random jitter, model stats hardcoded, "GPU TFLOPS" fabricated arithmetic, log stream read
+a deleted `.gemini/antigravity` path, FSM names didn't match the real controller, and no
+camera feed existed. Expanded scope into four workstreams:
+
+- **WS0** — save the Apple-design skill verbatim as `design-scheme.md`; all UI work obeys it
+- **WSA** — real ROS→dashboard telemetry (Node Express kept; new Python rclpy relay)
+- **WSB** — frontend: prompt buttons + color-pair builder, live camera feed, FSM pipeline
+- **WSC** — `wxd`: full-screen Textual TUI control center (claude-code-style)
+
+## ② Implementation
+
+**`design-scheme.md` (new):** Apple fluid-interface rules. Applied: pointer-down dispatch
+on buttons (§1), critically damped springs only (§4), reduced-motion cross-fade fallbacks
+(§14), specific labels ("Approach/Descend/Grip..." not generic chips) (§16).
+
+**Controller (`stacking_controller.py`):** publishes `/fsm_state` on transitions and
+`/jepa_telemetry` (real CEM inference ms) from the background worker.
+
+**`dashboard/backend/ros_bridge.py` (new):** rclpy node subscribing to `/joint_states`,
+`/gripper_closed`, `/fsm_state`, `/jepa_telemetry`, `/workspace_blocks`, `/camera/image_raw`
+(8fps JPEG throttle); POSTs JSON to Express. Snapshots carry `fsmStamp` so the server can
+reject out-of-order deliveries.
+
+**`dashboard/backend/server.js`:** `/ros/state` + `/ros/camera` endpoints; FSM updates
+guarded by monotonic stamp; prompts now published via `pixi run ros2 topic pub ...`
+(bare `ros2` doesn't exist outside pixi — was failing silently); deleted all fabricated
+metrics and the dead log path; event log now fed by real prompt/FSM events.
+
+**Frontend:** `ControlPanel.tsx` rewritten (Arrange All / Reset / color-pair builder with
+grammar matching the controller's regex parser); `CameraFeed.tsx` (new, base64-JPEG +
+stale detection); `FsmPipeline.tsx` (new, live state chips); App socket lifted to state;
+types updated to real CEM config.
+
+**`wxd.py` (new) + pixi deps:** Textual TUI — ASCII banner, status panel (FSM pipeline,
+joints°, gripper, CEM latency), blocks table, scrolling event log, prompt input bound to
+an embedded rclpy node, keybindings `a/r/g/s/p/q`. Runs via `pixi run wxd`.
+
+Bugs found during implementation (all fixed):
+1. `Float32` imported from `sensor_msgs` — wrong module, controller crashed at startup
+2. Stale server from a parallel session held port 4002 → served old fake data
+3. Out-of-order HTTP snapshots duplicated FSM transition logs → `fsmStamp` guard
+4. Server-side `exec('ros2 ...')` failed silently outside pixi env
+5. Textual rejects `classes='#left'` (`#` is id syntax)
+6. Review-flagged frontend regressions from parallel session: dropped pulse animation,
+   process-list slice mismatch, misleading "60 FPS" badge — fixed in WSB commit
+
+## ③ Test & Verification
+
+**OLD logs (broken/fake dashboard):**
+
+```
+# /api/state served fabricated data (stale parallel-session server on :4002):
+fsm: DONE
+joints: [0, -0.21, 0.45, -0.24]          ← hardcoded constants
+blocks: [hardcoded initial positions]     ← never updated
+inferenceMs: 31.5                         ← invented number
+cemConfig: {numSamples: 256, iterations: 3}   ← didn't match running code (64/2)
+# Log stream source path deleted months ago -> permanently empty.
+# Server console: EADDRINUSE :::4002 (old instance blocking updated code)
+```
+
+```
+# Dashboard-dispatched prompt never reached the robot (ros2 not on PATH):
+[4:03:19 PM] Prompt: "pick up the green block ..."
+(30+ seconds pass; controller receives nothing; fsm stays DONE)
+$ which ros2 → not found                  ← bare exec() inside node failed silently
+```
+
+**NEW logs (after fixes):**
+
+Dashboard-dispatched pick-and-place, full real FSM stream, zero duplicates:
+```
+[4:12:12 PM] Prompt: "pick up the blue block and place it on top of the red block"
+[4:12:14 PM] FSM -> MOVE_ABOVE_BLOCK
+[4:12:16 PM] FSM -> DESCEND
+[4:12:17 PM] FSM -> CLOSE_GRIPPER
+[4:12:18 PM] FSM -> LIFT
+[4:12:19 PM] FSM -> MOVE_ABOVE_STACK
+[4:12:22 PM] FSM -> PLACE
+[4:12:23 PM] FSM -> OPEN_GRIPPER
+[4:12:23 PM] FSM -> RETREAT
+[4:12:26 PM] FSM -> DONE
+blocks: [('Red', [0.15, 0.1, 0.02]), ('Green', [0.2, -0.099, 0.05]),
+         ('Blue', [0.15, 0.099, 0.05]), ('Yellow', [0.2, -0.1, 0.02])]
+                                              ↑ Blue now ON Red at z=0.05 — task really executed
+inferenceMs: 10800                            ← measured, not invented
+cemConfig: {'numSamples': 64, 'iterations': 2} ← matches running code
+camera: jpeg OK, 1410 bytes                   ← live synthetic feed flowing
+```
+
+wxd TUI headless pilot-harness test against the live sim:
+```
+1. compose OK
+2. ros data: fsm=DONE joints=[0.03, -1.23, 1.73, -0.5] blocks=4
+3. keybinding dispatch OK: prompt: "pick up the green block and place it on top of the yellow..."
+4. blocks table rows: 4
+ALL WXD TESTS PASSED
+# Controller confirms receipt:
+Task: pick block 1 at [0.2, -0.099, 0.05] -> block 3
+Task complete: placed block 1.
+```
+
+## ④ Overview
+
+Every surface that shows robot state now shows *real* state: web dashboard, API, and TUI
+all read the same ROS topics through one relay. Prompts can be dispatched three ways
+(Tkinter GUI, web dashboard buttons/pair-builder, `wxd` keys/input) and land on the same
+verified pick-and-place pipeline. Camera feed is visible in-browser; `pixi run wxd` gives
+a full terminal control center. Fabricated metrics are gone — unknowns render as "n/a".
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
 |----|------|-------|
-| P3 | Prompt GUI buttons | `terminal_prompt.py` is text-only today |
 | P4 | JEPA drives joints directly | Blocked on: real rendered goal images (currently black placeholder), action normalization vs training distribution, feeding real joint angles as proprio instead of zeros |
-| P5 | CEM speed | 64×2 ≈ 14s; 256×3 much worse. Options: fewer samples, batched MPS ops, torch.profiler, CPU comparison |
+| P5 | CEM speed | 64×2 ≈ 10-14s live; 256×3 much worse. Options: fewer samples, batched MPS ops, torch.profiler, CPU comparison |
 | P6 | Hardware bridge | NEMA17 (A4988/TMC2209 drivers, homing switches, non-linear joint2/3 push-rod mapping) + SG90 PWM gripper. Node subscribes to existing `/joint_states` + `/gripper_closed` so sim/hardware share interfaces |
 | — | RViz frame drops | Cosmetic (~1 per 2.5s); revisit TF clock alignment if it matters |
 | — | URDF portability | Mesh paths are absolute `file:///Users/roopalisingh/...` — breaks on other machines |
+| — | Dashboard: real camera source | `CameraFeed` toggle stub exists; wire iPhone ARKit bridge for real feed |
+| — | wxd: camera snapshot preview in-TUI | Currently saves to `captures/`; could render half-block preview via textual-image plugin |
