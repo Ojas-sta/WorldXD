@@ -10,6 +10,7 @@ from cv_bridge import CvBridge
 import torch
 import torchvision.transforms as transforms
 from jepa_model import JEPAWorldModel
+import goal_renderer
 
 from sensor_msgs.msg import Image, JointState
 from geometry_msgs.msg import PointStamped
@@ -19,6 +20,63 @@ from tf2_ros import Buffer, TransformListener
 COLOR_TO_ID = {'red': 0, 'green': 1, 'blue': 2, 'yellow': 3}
 BLOCK_HOME = {0: [0.15, 0.1, 0.02], 1: [0.20, 0.1, 0.02],
               2: [0.15, -0.1, 0.02], 3: [0.20, -0.1, 0.02]}
+
+# Prompt verbs recognized for pick tasks (regex-escaped where needed)
+_PICK_VERBS = r'(?:pick(?:\s+up)?|grab|move|take|lift|place)'
+_PLACE_PATTERNS = [
+    r'on\s*top\s+of\s+(?:the\s+)?',
+    r'onto\s+(?:the\s+)?',
+    r'on\s+(?:the\s+)?',
+    r'over\s+(?:the\s+)?',
+    r'above\s+(?:the\s+)?',
+]
+
+
+def parse_prompt(text):
+    """Parse a natural-language command into a task dict (pure function).
+
+    Returns one of:
+      {'action': 'reset'}
+      {'action': 'arrange'}
+      {'action': 'task', 'pick': id, 'place': id_or_None}   # place None = stack point
+      {'action': None}                                      # unrecognized
+    """
+    if not text or not text.strip():
+        return {'action': None}
+    t = text.lower().strip()
+
+    # reset dominates: explicit stop/undo words
+    if re.search(r'\b(reset|clear|stop|separate|unstack|split up?)\b', t):
+        return {'action': 'reset'}
+
+    # "arrange all" / "stack everything" style. A bare trailing 'all'
+    # ("at ALL") must NOT trigger this — require action context.
+    if ('arrange' in t or 'everything' in t or t == 'all'
+            or re.search(r'all blocks|block together|blocks? together|'
+                         r'each other|one tower|a tower', t)):
+        return {'action': 'arrange'}
+
+    pick = place = None
+    m_pick = re.search(_PICK_VERBS + r'\s+(?:up\s+)?(?:the\s+)?(red|green|blue|yellow)', t)
+    if m_pick:
+        pick = COLOR_TO_ID[m_pick.group(1)]
+    else:
+        for name, idx in COLOR_TO_ID.items():
+            if re.search(r'\b' + name + r'\b', t):
+                pick = idx
+                break
+
+    for pat in _PLACE_PATTERNS:
+        m_place = re.search(pat + r'(red|green|blue|yellow)', t)
+        if m_place:
+            cand = COLOR_TO_ID[m_place.group(1)]
+            if cand != pick:
+                place = cand
+            break
+
+    if pick is None:
+        return {'action': None}
+    return {'action': 'task', 'pick': pick, 'place': place}
 
 
 class StackingController(Node):
@@ -112,48 +170,50 @@ class StackingController(Node):
         dest = 'stack' if place_id is None else f'block {place_id}'
         self.get_logger().info(
             f"Task: pick block {pick_id} at {[round(v, 3) for v in src]} -> {dest}")
+        # P4: render a REAL goal image — the desired end state with the picked
+        # block stacked on its destination (replaces the black placeholder).
+        try:
+            blocks = [{'id': i, 'pos': list(self._block_pos(i))} for i in range(4)]
+            base_pos = (list(self._block_pos(place_id))
+                        if place_id is not None else list(self.stack_target))
+            goal_blocks = [b for b in blocks if b['id'] != pick_id]
+            level = 1 + sum(1 for b in goal_blocks
+                            if abs(b['pos'][0] - base_pos[0]) < 0.02 and
+                            abs(b['pos'][1] - base_pos[1]) < 0.02)
+            goal_blocks.append({'id': pick_id,
+                                'pos': [base_pos[0], base_pos[1],
+                                        base_pos[2] + 0.04 * max(level - 1, 0)]})
+            goal_img = goal_renderer.render_goal(goal_blocks)
+            self.goal_tensor = self.transform(goal_img).unsqueeze(0).to(self.device)
+            self.get_logger().info("Goal image rendered for JEPA planner.")
+        except Exception as e:
+            self.get_logger().warn(f"Goal render failed (keeping previous): {e}")
 
     def prompt_callback(self, msg):
-        text = msg.data.lower()
-        self.get_logger().info(f"Received prompt: {text}")
+        text = msg.data
+        self.get_logger().info(f"Received prompt: {text[:120]}")
+        task = parse_prompt(text)
 
-        if 'reset' in text or 'down' in text or 'separate' in text:
+        if task['action'] == 'reset':
             self.queue = []
             self.state = 'DONE'
             self.get_logger().info("Resetting.")
             return
 
-        if 'arrange' in text or ('all' in text and 'on top of' not in text):
+        if task['action'] == 'arrange':
             self.queue = [(i, None) for i in range(4)]
             pick, place = self.queue.pop(0)
             self._start_task(pick, place)
             return
 
-        pick = place = None
-        m_pick = re.search(r'(?:pick(?:\s+up)?|grab|move)\s+(?:the\s+)?(red|green|blue|yellow)', text)
-        if m_pick:
-            pick = COLOR_TO_ID[m_pick.group(1)]
-        else:
-            for name, idx in COLOR_TO_ID.items():
-                if name in text:
-                    pick = idx
-                    break
-
-        m_place = re.search(r'on top of\s+(?:the\s+)?(red|green|blue|yellow)', text)
-        if m_place:
-            place = COLOR_TO_ID[m_place.group(1)]
-            if pick is not None and place == pick:
-                self.get_logger().info("Cannot stack a block onto itself.")
-                return
-
-        if pick is None:
-            self.get_logger().info(
-                "Prompt not recognized. Example: 'pick up the green block and place it "
-                "on top of the yellow block'.")
+        if task['action'] == 'task':
+            self.queue = []
+            self._start_task(task['pick'], task['place'])
             return
 
-        self.queue = []
-        self._start_task(pick, place)
+        self.get_logger().info(
+            "Prompt not recognized. Example: 'pick up the green block and place it "
+            "on top of the yellow block'.")
 
     # ------------------------------------------------------------- JEPA worker
     def image_callback(self, msg):
@@ -172,9 +232,14 @@ class StackingController(Node):
                 continue
             try:
                 img_tensor = self.transform(frame).unsqueeze(0).to(self.device)
+                # P4: real proprio [ee_x, ee_y, ee_z, gripper_open] — encode()
+                # normalizes against metaworld dataset stats internally.
+                proprio = [self.current_ee[0], self.current_ee[1],
+                           self.current_ee[2], 1.0 if self.gripper_open else 0.0]
                 t0 = time.perf_counter()
                 with torch.no_grad():
-                    action = self.model.get_action(img_tensor, self.goal_tensor)
+                    action = self.model.get_action(img_tensor, self.goal_tensor,
+                                                   proprio=proprio)
                 # Real inference latency for dashboard/CLI telemetry
                 tele = Float32()
                 tele.data = (time.perf_counter() - t0) * 1000.0
