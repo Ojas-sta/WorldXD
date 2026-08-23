@@ -186,7 +186,13 @@ class StackingController(Node):
 
     # ------------------------------------------------------------- manual jog
     def ee_target_callback(self, msg):
-        """Drag updates from the RViz interactive marker."""
+        """Drag updates from the RViz interactive marker.
+
+        P3.3 guardrail: ignored entirely while a task is running — JEPA/state
+        machine owns the arm until it finishes.
+        """
+        if self.state not in ('DONE', 'MANUAL'):
+            return
         self.manual_target = [msg.point.x, msg.point.y, msg.point.z]
         if self.state != 'MANUAL':
             self.queue = []

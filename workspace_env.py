@@ -33,6 +33,10 @@ class WorkspaceEnv(Node):
         # Manual block drags from the RViz interactive markers (manual_marker.py)
         self.block_move_sub = self.create_subscription(
             PointStamped, '/block_move', self.block_move_callback, 10)
+        # P3.3 guardrail: track task activity; blocks are fixed while a task runs
+        from std_msgs.msg import Float32 as _F32
+        self.task_busy = False
+        self.fsm_sub = self.create_subscription(String, 'fsm_state', self.fsm_callback, 10)
         
         self.gripper_closed = False
         self.grabbed_block = None
@@ -65,12 +69,19 @@ class WorkspaceEnv(Node):
         self.timer = self.create_timer(1.0 / 30.0, self.timer_callback)
         self.get_logger().info(f"Workspace Environment Initialized.")
 
+    def fsm_callback(self, msg):
+        self.task_busy = msg.data not in ('DONE', 'MANUAL')
+
     def block_move_callback(self, msg):
         """Drag updates from manual_marker: relocate the named block.
 
-        Refuses while the arm is carrying that block (position is owned by
-        the gripper TF until released).
+        Refuses while the arm carries that block (position is owned by
+        the gripper TF until released) and during running tasks (P3.3).
         """
+        if self.task_busy:
+            self.get_logger().info(
+                'Block move refused: task in progress.', throttle_duration_sec=5.0)
+            return
         try:
             bid = int(msg.header.frame_id.replace('block_', ''))
         except ValueError:
