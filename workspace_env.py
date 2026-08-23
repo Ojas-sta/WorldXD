@@ -57,7 +57,19 @@ class WorkspaceEnv(Node):
         ]
         import copy
         self.blocks = copy.deepcopy(self.initial_blocks)
-        
+
+        # P3.5 physics state: per-block fall velocity + last manual-drag time.
+        # A block that was hand-dragged stays kinematic briefly after its last
+        # /block_move message, then gravity takes over (P3.5).
+        import time as _time
+        self._vel = {b['id']: 0.0 for b in self.blocks}
+        self._last_move = {b['id']: 0.0 for b in self.blocks}
+        self._last_physics = _time.monotonic()
+        self.BLOCK_HALF = 0.02
+        self.TABLE_Z = 0.0      # table SURFACE height; block centers rest at 0.02
+        self.GRAVITY = 2.5      # m/s^2, scaled down so falls read at 30Hz
+        self.DRAG_GRACE = 0.35  # s of kinematic hold after a drag message
+
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
         # Pre-render markers at a fixed high resolution once; resize per frame.
         # Generating markers at tiny/odd sizes fails intermittently -> visual glitches.
@@ -93,12 +105,16 @@ class WorkspaceEnv(Node):
             max(min(msg.point.y, 0.30), -0.30),
             max(msg.point.z, 0.02),
         ]
+        import time as _time
+        self._last_move[bid] = _time.monotonic()   # hold kinematic during drag (P3.5)
 
     def prompt_callback(self, msg):
         import copy
         text = msg.data.lower()
         if 'reset' in text or 'down' in text or 'separate' in text:
             self.blocks = copy.deepcopy(self.initial_blocks)
+            self._vel = {b['id']: 0.0 for b in self.blocks}
+            self._last_move = {b['id']: 0.0 for b in self.blocks}
             self.grabbed_block = None
             self.get_logger().info("Physically reset blocks to initial positions.")
 
@@ -129,6 +145,51 @@ class WorkspaceEnv(Node):
                 self.get_logger().info(f"Released block {self.grabbed_block}")
             self.grabbed_block = None
 
+    # ------------------------------------------------------------- P3.5 physics
+    def _support_height(self, block):
+        """Highest resting surface (table or block top) under this block."""
+        support = self.TABLE_Z
+        bx, by, bz = block['pos']
+        for other in self.blocks:
+            if other is block:
+                continue
+            ox, oy, oz = other['pos']
+            xy_overlap = (abs(bx - ox) < 2 * self.BLOCK_HALF - 0.002 and
+                          abs(by - oy) < 2 * self.BLOCK_HALF - 0.002)
+            o_top = oz + self.BLOCK_HALF
+            # Only count surfaces at or below our center (no telekinetic shelves)
+            if xy_overlap and o_top <= bz + 0.005 and o_top > support:
+                support = o_top
+        return support
+
+    def physics_step(self):
+        """Gravity + stacking: free blocks fall until they rest on something."""
+        import time as _time
+        now = _time.monotonic()
+        dt = min(now - self._last_physics, 0.1)
+        self._last_physics = now
+
+        for b in self.blocks:
+            bid = b['id']
+            if self.grabbed_block == bid:
+                self._vel[bid] = 0.0
+                continue
+            if now - self._last_move.get(bid, 0.0) < self.DRAG_GRACE:
+                continue  # held by a live hand-drag: kinematic
+            rest_z = self._support_height(b) + self.BLOCK_HALF
+            z = b['pos'][2]
+            if z > rest_z + 0.001:
+                # airborne: accelerate downward
+                self._vel[bid] += self.GRAVITY * dt
+                b['pos'][2] = max(rest_z, z - self._vel[bid] * dt)
+            elif z < rest_z - 0.001:
+                # intersecting the support column (dragged into it): push up
+                b['pos'][2] = rest_z
+                self._vel[bid] = 0.0
+            else:
+                b['pos'][2] = rest_z
+                self._vel[bid] = 0.0
+
     def timer_callback(self):
         # Update grabbed block position
         if self.grabbed_block is not None:
@@ -141,7 +202,8 @@ class WorkspaceEnv(Node):
                 ]
             except Exception as e:
                 self.get_logger().warn(f"Grabbed-block TF lookup failed: {e}", throttle_duration_sec=5.0)
-                
+
+        self.physics_step()
         self.publish_markers_and_tf()
         self.render_synthetic_camera()
 
