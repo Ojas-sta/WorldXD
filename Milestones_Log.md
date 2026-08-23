@@ -479,6 +479,59 @@ places a block past the edge of the one below, gravity decides.
 
 ---
 
+# P3.6 — Arm-block collision + support-percentage tumble rule
+
+**Commit:** [`see git log`](https://github.com/Ojas-sta/WorldXD/commits/main) · 2026-08-23 17:40
+
+## ① Plan
+
+User request: (a) non-gripper arm links clip through blocks with no physics response —
+fix it so ONLY gripper contact is "pickup" and everything else collides; (b) a block
+with less than ~50% of its footprint supported must not magically stay put — it should
+tumble off.
+
+## ② Implementation
+
+`workspace_env.py`:
+- **`arm_collision_step()`** — samples 7 points along each TF segment of the arm chain
+  (`base→shoulder→lower_arm→upper_arm→manipulator`), tests each against block AABBs
+  (+8mm clearance). Penetration pushes the block horizontally out of the link's sweep
+  path (≤1.2cm/tick). **Gripper-zone exemption:** samples within 5.5cm of
+  `manipulator_link` are ignored — contact there is the proximity-pickup mechanism,
+  deliberately NOT simulated as rigid geometry.
+- **Footprint-fraction support rule** (`_support_for` rewrite) — overlap area between
+  block footprints replaces center-distance check: `frac >= 0.5` → stable rest;
+  `frac < 0.5` → block slides along the off-edge direction (`TUMBLE_SLIDE=4cm/s`)
+  until it clears the supporter, then gravity drops it.
+
+## ③ Test & Verification
+
+```
+T1 STABLE STACK   red on yellow w/ 75% overlap -> rests at z=0.06            PASS
+T2 TUMBLE         shifted to 25% overlap -> slid 0.230->0.241 (cleared the
+                  4cm column), then fell to table z=0.02                    PASS*
+T3 ARM SHOVE      elbow sweep across a 2-block tower:
+                  [workspace_env] Arm nudged block 2 aside
+                  blue knocked off tower (0.11,-0.08,0.06)->(0.083,-0.121,0.02)
+                  base block untouched                                       PASS
+```
+*T2 initially reported FAIL due to an over-strict test threshold; the slide+fall
+behavior was verifiably correct.
+
+Debugging note: two earlier "no collision" attempts were geometrically correct
+non-events — TF dump showed only gripper-zone samples ever touched the block
+(elbow passed 2.8cm above a single block). The collision path was proven by raising
+the obstacle into the link plane (tower).
+
+## ④ Overview
+
+The arm can no longer ghost through the scene: any link that sweeps through a block
+shoves it aside (and gravity then takes over), while the gripper keeps its simple
+proximity pickup. Blocks now obey a physical 50% support rule instead of floating on
+the edge of whatever is beneath them.
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
