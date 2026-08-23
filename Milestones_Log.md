@@ -14,10 +14,10 @@ Each milestone below is documented in 4 parts: **① Plan → ② Implementation
 
 | ID | Milestone | Status |
 |----|-----------|--------|
-| P0 | Verify JEPA-WMS CEM planner fixes end-to-end | ✅ Done — 2026-08-23 |
-| P1 | Fix glitchy synthetic camera feed + frozen-arm bugs | ✅ Done — 2026-08-23 |
+| P0 | Verify JEPA-WMS CEM planner fixes end-to-end | ✅ Done — 2026-08-23 15:29 |
+| P1 | Fix glitchy synthetic camera feed + frozen-arm bugs | ✅ Done — 2026-08-23 15:29 |
 | P2 | Add `/camera/camera_info` publisher | ✅ Pre-existing (doc was stale) |
-| P3 | Stack-boxes UI: dashboard truth-fix, prompt buttons, camera feed, wxd CLI | ✅ Done — 2026-08-23 |
+| P3 | Stack-boxes UI: dashboard truth-fix, prompt buttons, camera feed, wxd CLI | ✅ Done — 2026-08-23 15:29 |
 | P4 | Close the loop: JEPA drives joints directly | ⬜ Not started |
 | P5 | CEM performance optimization (~14s → real-time) | ⬜ Not started |
 | P6 | Real hardware bridge (NEMA17 steppers + SG90 servo) | 🆕 Proposed |
@@ -26,7 +26,7 @@ Each milestone below is documented in 4 parts: **① Plan → ② Implementation
 
 # P0 — Verify JEPA-WMS CEM planner fixes end-to-end
 
-**Commit:** [`7c1ce02`](https://github.com/Ojas-sta/WorldXD/commit/7c1ce02) · 2026-08-23 00:30
+**Commit:** [`7c1ce02`](https://github.com/Ojas-sta/WorldXD/commit/7c1ce02) · 2026-08-23 00:30 00:30
 
 ## ① Plan
 
@@ -98,7 +98,7 @@ the ±0.1 clamp (normalization vs training distribution — deferred to P4/P5).
 
 # P1 — Fix glitchy feed + frozen arm + working pick-and-place
 
-**Commit:** [`8e76519`](https://github.com/Ojas-sta/WorldXD/commit/8e76519) · 2026-08-23 15:29
+**Commit:** [`8e76519`](https://github.com/Ojas-sta/WorldXD/commit/8e76519) · 2026-08-23 15:29 15:29
 
 ## ① Plan
 
@@ -215,10 +215,7 @@ history needed before risky refactors.
 
 # P3 — Control UI: Dashboard truth-fix, prompt buttons, camera feed, wxd TUI
 
-**Commits:** [`a983621`](https://github.com/Ojas-sta/WorldXD/commit/a983621) (design scheme) ·
-[`4e99f06`](https://github.com/Ojas-sta/WorldXD/commit/4e99f06) (backend relay) ·
-[`11a0dcf`](https://github.com/Ojas-sta/WorldXD/commit/11a0dcf) (frontend) ·
-[`4c9eb74`](https://github.com/Ojas-sta/WorldXD/commit/4c9eb74) (CLI) · 2026-08-23
+**Commits:** [`a983621`](https://github.com/Ojas-sta/WorldXD/commit/a983621) 15:55 (design scheme) · [`4e99f06`](https://github.com/Ojas-sta/WorldXD/commit/4e99f06) 16:08 (backend relay) · [`11a0dcf`](https://github.com/Ojas-sta/WorldXD/commit/11a0dcf) 16:12 (frontend) · [`4c9eb74`](https://github.com/Ojas-sta/WorldXD/commit/4c9eb74) 16:17 (CLI)
 
 ## ① Plan
 
@@ -338,7 +335,8 @@ a full terminal control center. Fabricated metrics are gone — unknowns render 
 
 # P3.1 — Manual control add-ons: EE jog + draggable blocks (interactive markers)
 
-**Commits:** [`see git log`](https://github.com/Ojas-sta/WorldXD/commits/main) · 2026-08-23
+**Commits:** [`c65b7aa`](https://github.com/Ojas-sta/WorldXD/commit/c65b7aa) 16:24 (EE jog) ·
+[`c0b7e26`](https://github.com/Ojas-sta/WorldXD/commit/c0b7e26) 16:31 (draggable blocks)
 
 ## ① Plan
 
@@ -380,6 +378,47 @@ cube — with the simulation state, camera feed, dashboard and TUI all staying c
 
 ---
 
+# P3.3 — Guardrails: manual control locked while JEPA/tasks run
+
+**Commit:** [`72948d3`](https://github.com/Ojas-sta/WorldXD/commit/72948d3) · 2026-08-23 16:39
+
+## ① Plan
+
+User request: while JEPA/state-machine tasks run, (a) EE jog must not steal the arm,
+(b) blocks must be fixed (no interactive-marker moves), (c) the jog sphere's axis arrows
+must disappear. Guardrail authority = controller's `/fsm_state`.
+
+## ② Implementation
+
+Three independent layers so a stale client can never win:
+1. **`manual_marker.py`** — subscribes `/fsm_state`; on task start re-builds all markers:
+   EE sphere dimmed + `interaction_mode=NONE` (axes removed), block cubes non-draggable;
+   feedback callbacks additionally drop any drags that slip through. On `DONE`/`MANUAL`
+   everything is restored.
+2. **`workspace_env.py`** — refuses `/block_move` while task busy (logged, rate-limited).
+3. **`stacking_controller.py`** — `/ee_target` ignored unless state is DONE/MANUAL.
+
+## ③ Test & Verification
+
+```
+[manual_marker] Guardrails ENGAGED (task running) [fsm=MOVE_ABOVE_BLOCK]
+(10x /ee_target drags sent during task -> zero "MANUAL jog engaged" in controller log)
+DURING task: yellow still home? True -> (0.2, -0.1)      ← /block_move refused
+[manual_marker] Guardrails released [fsm=DONE]
+AFTER task done: yellow moved to exactly (0.3, 0.22)     ← draggable again
+```
+
+(Note: a "GUARDRAIL TEST: FAIL" line in the raw test output was a sign error in the test
+script itself (`y + 0.22` checks for -0.22); the block verifiably reached the target.)
+
+## ④ Overview
+
+Manual control and autonomous tasks can no longer fight over the robot: the moment a
+task starts, all interactive markers go read-only and every transport layer drops manual
+commands; control returns automatically on completion.
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
@@ -391,3 +430,4 @@ cube — with the simulation state, camera feed, dashboard and TUI all staying c
 | — | URDF portability | Mesh paths are absolute `file:///Users/roopalisingh/...` — breaks on other machines |
 | — | Dashboard: real camera source | `CameraFeed` toggle stub exists; wire iPhone ARKit bridge for real feed |
 | — | wxd: camera snapshot preview in-TUI | Currently saves to `captures/`; could render half-block preview via textual-image plugin |
+| — | Duplicate prompts restart tasks | Each received prompt calls `_start_task` even mid-task; consider ignoring prompts while a task is active or queueing them |
