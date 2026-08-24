@@ -209,6 +209,17 @@ app.post('/ros/camera', (req, res) => {
   res.json({ ok: true });
 });
 
+// P4.2: rendered JEPA goal view
+let latestGoalJpeg = null;
+app.post('/ros/goal_camera', (req, res) => {
+  latestGoalJpeg = req.body && req.body.jpeg ? req.body.jpeg : null;
+  if (latestGoalJpeg) io.emit('goal_camera', latestGoalJpeg);
+  res.json({ ok: true });
+});
+app.get('/api/goal_camera', (req, res) => {
+  res.json({ jpeg: latestGoalJpeg });
+});
+
 app.get('/api/camera', (req, res) => {
   res.json({ jpeg: latestCameraJpeg });
 });

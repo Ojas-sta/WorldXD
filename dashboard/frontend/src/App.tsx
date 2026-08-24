@@ -133,6 +133,9 @@ export function App() {
         <div style={{ gridColumn: 'span 4', display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <ModelCard model={defaultModel} />
           <CameraFeed socket={socket} resolution={telemetry?.session.cameraRes ?? null} />
+          <CameraFeed socket={socket} resolution={null}
+            event="goal_camera" title="JEPA Goal View"
+            iconColor="var(--accent-teal)" note="rendered target · 1 fps" />
           <SystemCard system={defaultSystem} />
         </div>
 

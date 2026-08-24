@@ -5,11 +5,17 @@ import { io } from 'socket.io-client';
 interface Props {
   socket: ReturnType<typeof io> | null;
   resolution: [number, number] | null;
+  event?: string;          // socket event name ('camera' live | 'goal_camera' P4.2)
+  title?: string;
+  iconColor?: string;
+  note?: string;
 }
 
-// Live feed of the synthetic camera (/camera/image_raw via ros_bridge -> server).
-// Frames arrive as base64 JPEG on the 'camera' socket event (~8 fps).
-export const CameraFeed: React.FC<Props> = ({ socket, resolution }) => {
+// Feed panel for base64-JPEG streams relayed by ros_bridge -> server.
+// 'camera' = live synthetic feed (~8 fps); 'goal_camera' = rendered JEPA goal (1 fps).
+export const CameraFeed: React.FC<Props> = ({ socket, resolution,
+  event = 'camera', title = 'Onboard Camera', iconColor = 'var(--accent-purple)',
+  note = '~8 fps' }) => {
   const [frame, setFrame] = useState<string | null>(null);
   const [lastFrameTime, setLastFrameTime] = useState<number>(0);
   const [stale, setStale] = useState(true);
@@ -21,11 +27,16 @@ export const CameraFeed: React.FC<Props> = ({ socket, resolution }) => {
       setLastFrameTime(Date.now());
       setStale(false);
     };
-    socket.on('camera', onCamera);
+    socket.on(event, onCamera);
+    // fetch the last frame already sitting on the server
+    fetch(`http://localhost:4002/api/${event === 'goal_camera' ? 'goal' : ''}camera`)
+      .then(r => r.json()).then(d => {
+        if (d.jpeg) { setFrame(`data:image/jpeg;base64,${d.jpeg}`); setStale(false); }
+      }).catch(() => {});
     return () => {
-      socket.off('camera', onCamera);
+      socket.off(event, onCamera);
     };
-  }, [socket]);
+  }, [socket, event]);
 
   // Mark feed stale if no frame for >2s (node down / sim stopped)
   useEffect(() => {
@@ -39,8 +50,8 @@ export const CameraFeed: React.FC<Props> = ({ socket, resolution }) => {
     <div className="apple-glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Camera size={18} color="var(--accent-purple)" />
-          <h2 style={{ fontSize: '15px', fontWeight: 600 }}>Onboard Camera</h2>
+          <Camera size={18} color={iconColor} />
+          <h2 style={{ fontSize: '15px', fontWeight: 600 }}>{title}</h2>
         </div>
         <span className="badge" style={{
           background: stale ? 'rgba(255,69,58,0.15)' : 'rgba(48,209,88,0.15)',
@@ -75,7 +86,7 @@ export const CameraFeed: React.FC<Props> = ({ socket, resolution }) => {
           fontSize: '10px', color: 'rgba(255,255,255,0.5)',
           background: 'rgba(0,0,0,0.6)', padding: '3px 7px', borderRadius: '5px'
         }}>
-          {resolution ? `${resolution[0]}×${resolution[1]}` : '—'} · synthetic · ~8 fps
+          {resolution ? `${resolution[0]}×${resolution[1]}` : '—'} · synthetic · {note}
         </div>
       </div>
     </div>

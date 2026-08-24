@@ -12,7 +12,7 @@ import torchvision.transforms as transforms
 from jepa_model import JEPAWorldModel
 import goal_renderer
 
-from sensor_msgs.msg import Image, JointState
+from sensor_msgs.msg import Image, JointState, CameraInfo
 from geometry_msgs.msg import PointStamped
 from std_msgs.msg import Bool, String, Float32
 from tf2_ros import Buffer, TransformListener
@@ -87,8 +87,11 @@ class StackingController(Node):
         self.gripper_pub = self.create_publisher(Bool, '/gripper_closed', 10)
         self.fsm_pub = self.create_publisher(String, 'fsm_state', 10)
         self.jepa_telemetry_pub = self.create_publisher(Float32, 'jepa_telemetry', 10)
-        # P4: RViz visibility into what the planner is planning TOWARD
+        # P4: RViz visibility into what the planner is planning TOWARD.
+        # RViz's Camera display requires a sibling CameraInfo on
+        # /jepa/camera_info or the view stays blank.
         self.goal_img_pub = self.create_publisher(Image, '/jepa/goal_image', 10)
+        self.goal_info_pub = self.create_publisher(CameraInfo, '/jepa/camera_info', 10)
         self.camera_sub = self.create_subscription(Image, '/camera/image_raw', self.image_callback, 10)
         self.prompt_sub = self.create_subscription(String, 'user_prompt', self.prompt_callback, 10)
         # Manual jog: interactive-marker drags stream /ee_target; while targets
@@ -162,6 +165,16 @@ class StackingController(Node):
         if self._goal_img_msg is not None:
             self._goal_img_msg.header.stamp = self.get_clock().now().to_msg()
             self.goal_img_pub.publish(self._goal_img_msg)
+            info = CameraInfo()
+            info.header = self._goal_img_msg.header
+            info.height, info.width = 224, 224
+            info.distortion_model = 'plumb_bob'
+            f, c = 200.0, 112.0     # matches workspace_env projection
+            # NOTE: every element must be a float literal — ROS2 msg validation
+            # rejects ints ("each value of type 'float'")
+            info.k = [f, 0.0, c, 0.0, f, c, 0.0, 0.0, 1.0]
+            info.p = [f, 0.0, c, 0.0, 0.0, f, c, 0.0, 0.0, 0.0, 1.0, 0.0]
+            self.goal_info_pub.publish(info)
 
     # ------------------------------------------------------------------ prompts
     def _block_pos(self, block_id):

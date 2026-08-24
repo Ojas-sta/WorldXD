@@ -59,6 +59,8 @@ class RosBridge(Node):
         self.create_subscription(MarkerArray, 'workspace_blocks', self.on_blocks, 10)
         qos_sensor = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.create_subscription(Image, '/camera/image_raw', self.on_camera, qos_sensor)
+        # P4.2: JEPA goal view for the dashboard
+        self.create_subscription(Image, '/jepa/goal_image', self.on_goal_camera, qos_sensor)
         self.create_subscription(CameraInfo, '/camera/camera_info', self.on_camera_info, qos_sensor)
 
         # Latest state snapshot merged into one payload per event.
@@ -122,6 +124,19 @@ class RosBridge(Node):
     def on_camera_info(self, msg):
         with self._lock:
             self.state['imageRes'] = [msg.width, msg.height]
+
+    def on_goal_camera(self, msg):
+        """P4.2: forward the rendered JEPA goal view to the dashboard."""
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if not ok:
+                return
+            b64 = base64.b64encode(buf.tobytes()).decode()
+            threading.Thread(
+                target=post, args=('/ros/goal_camera', {'jpeg': b64}), daemon=True).start()
+        except Exception as e:
+            self.get_logger().warn(f'goal relay error: {e}', throttle_duration_sec=5.0)
 
     def on_camera(self, msg):
         now = self.get_clock().now().nanoseconds / 1e9
