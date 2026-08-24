@@ -233,6 +233,59 @@ class StackingController(Node):
         except Exception:
             return BLOCK_HOME.get(block_id, [0.2, 0.0, 0.02])
 
+    STAGING_SPOTS = [[0.28, 0.18], [0.28, -0.18], [0.10, 0.18], [0.10, -0.18]]
+
+    def _staging_pos(self):
+        """First free staging spot (P4.7): where blockers get parked."""
+        for sx, sy in self.STAGING_SPOTS:
+            free = True
+            for i in range(4):
+                bx, by, _ = self._block_pos(i)
+                if (bx - sx) ** 2 + (by - sy) ** 2 < 0.05 ** 2:
+                    free = False
+                    break
+            if free:
+                return [sx, sy, 0.02]
+        return self.STAGING_SPOTS[0] + [0.02]   # all busy: worst-case overlap
+
+    def _block_on_top_of(self, block_id):
+        """Id of a block resting directly on top of block_id, else None."""
+        bx, by, bz = self._block_pos(block_id)
+        for other in range(4):
+            if other == block_id:
+                continue
+            ox, oy, oz = self._block_pos(other)
+            if (abs(ox - bx) < 0.03 and abs(oy - by) < 0.03
+                    and 0.02 <= (oz - bz) <= 0.06):
+                return other
+        return None
+
+    def plan_task(self, pick_id, place_id):
+        """P4.7 (issue #2): decompose into unstack-first subtasks.
+
+        Returns a queue of (pick, place) tuples. Blockers on top of the pick
+        target and occupants of the destination column are parked at staging
+        spots before the main pair executes.
+        """
+        queue = []
+        moved = set()
+        # 1) clear anything stacked ON the block we need to pick
+        blocker = self._block_on_top_of(pick_id)
+        while blocker is not None and blocker not in moved:
+            queue.append((blocker, 'STAGING'))
+            moved.add(blocker)
+            blocker = self._block_on_top_of(pick_id)
+        # 2) clear the destination column (excluding the pick block itself)
+        if isinstance(place_id, int):
+            occ = self._block_on_top_of(place_id)
+            while occ is not None and occ not in moved and occ != pick_id:
+                queue.append((occ, 'STAGING'))
+                moved.add(occ)
+                occ = self._block_on_top_of(place_id)
+        # 3) the main pair
+        queue.append((pick_id, place_id))
+        return queue
+
     def _start_task(self, pick_id, place_id):
         self.pick_block_id = pick_id
         self.place_block_id = place_id
@@ -245,6 +298,8 @@ class StackingController(Node):
         # P4: render a REAL goal image — the desired end state with the picked
         # block stacked on its destination (replaces the black placeholder).
         try:
+            if place_id == 'STAGING':
+                raise ValueError('no goal render for staging moves')
             blocks = [{'id': i, 'pos': list(self._block_pos(i))} for i in range(4)]
             base_pos = (list(self._block_pos(place_id))
                         if place_id is not None else list(self.stack_target))
@@ -283,8 +338,9 @@ class StackingController(Node):
             return
 
         if task['action'] == 'task':
-            self.queue = []
-            self._start_task(task['pick'], task['place'])
+            self.queue = self.plan_task(task['pick'], task['place'])
+            pick, place = self.queue.pop(0)
+            self._start_task(pick, place)
             return
 
         self.get_logger().info(
@@ -467,7 +523,9 @@ class StackingController(Node):
                 self.state_ticks = 0
 
         elif self.state == 'MOVE_ABOVE_STACK':
-            if self.place_block_id is None:
+            if self.place_block_id == 'STAGING':
+                t = self._staging_pos()
+            elif self.place_block_id is None:
                 t = self._stack_target_pos()
             else:
                 t = self._block_pos(self.place_block_id)
@@ -476,7 +534,9 @@ class StackingController(Node):
                 self.state_ticks = 0
 
         elif self.state == 'PLACE':
-            if self.place_block_id is None:
+            if self.place_block_id == 'STAGING':
+                t = self._staging_pos()
+            elif self.place_block_id is None:
                 t = self._stack_target_pos()
             else:
                 t = self._block_pos(self.place_block_id)
