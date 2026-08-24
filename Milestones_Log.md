@@ -801,6 +801,41 @@ guarantees survive the changes.
 
 ---
 
+# P4.6 — Physics honesty fixes: ghost-overlap resolution + carry-phase suppression
+
+**Commit:** [`see git log`](https://github.com/Ojas-sta/WorldXD/commits/main) · 2026-08-24 ·
+**GitHub issues:** #1 (closed, fixed) · #8 (closed, re-diagnosed+fixed) · #2–#7 filed open
+
+## ① Plan
+
+Cross-reference audit of RViz logs vs previously issued tasks surfaced E-A/E-B live.
+User directive: fix now, then publish updated fixed-% ratings; file everything as
+GitHub issues.
+
+## ② Implementation
+
+- `separation_step()` — same-level AABB overlaps between free blocks resolve each tick
+  along the least-penetration axis (grabbed/hand-dragged exempt)
+- Arm-collision suppression extended to LIFT/MOVE_ABOVE_STACK while carrying
+
+## ③ Test & Verification
+
+```
+verbatim 'yellow under red' rerun:  red-blue dist=0.085 (was <0.001)  PASS no-ghost-overlap
+regression clean stack:             y=(0.2,0.099,0.06) on g=(0.2,0.1,0.02)  PASS
+regression arrange tower:           heights=[0.18,0.06,0.02,0.02]           PASS
+re-diagnosis: green's collapse after base pickup = CORRECT tip-off physics,
+not a collision bug (issue #8 closed as such)
+```
+
+## ④ Overview
+
+The simulation is now physically honest: released blocks can never coexist inside the
+same volume. Residual semantic gap (occupied destinations need unstack-first planning)
+filed as issue #2 for P4.7.
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
@@ -814,7 +849,13 @@ guarantees survive the changes.
 | — | wxd: camera snapshot preview in-TUI | Currently saves to `captures/`; could render half-block preview via textual-image plugin |
 | — | Duplicate prompts restart tasks | Each received prompt calls `_start_task` even mid-task; consider ignoring prompts while a task is active or queueing them |
 | — | **P4.1 retest:** E3 tipping fidelity | Block straddling different-height supporters drops beside rather than tipping onto the lower one |
-| — | **P4.1 retest:** E6 lateral block-block separation | No systematic AABB push-out between blocks after shoves; add small separation pass if it shows up in practice |
+| — | ~~P4.1 retest: E6 lateral block-block separation~~ | ✅ FIXED in P4.6 (`separation_step()`); GitHub issue #1 closed |
+| — | P4.7 candidate: unstack-first planning for occupied destinations | GitHub issue #2 |
+| — | P4 main: JEPA action application | GitHub issue #3 |
+| — | Duplicate prompts restart tasks | GitHub issue #4 |
+| — | Descriptive sentences execute as commands | GitHub issue #5 |
+| — | CEM latency ~12.7s | GitHub issue #6 → milestone P5 |
+| — | RViz periodic frame drops | GitHub issue #7 |
 | — | P4 next: action application policy | Denormalized JEPA actions exist but controller still uses geometric FSM; decide residual-mix vs full-JEPA drive |
 | — | P4 known deviation: goal camera mount | goal_renderer uses fixed overhead cam (0.87m); live camera_link rides EE — reconcile when JEPA takes over driving |
 | — | P4 known limit: batch>1 planning returns fallback zeros (B=1 by design) |
