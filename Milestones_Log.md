@@ -736,6 +736,71 @@ and API. Two subtle ROS2/RViz contract bugs documented for posterity.
 
 ---
 
+# P4.5 — Relational spatial prompts ("keep the blue block under the red block") + live edge sweep
+
+**Commit:** [`see git log`](https://github.com/Ojas-sta/WorldXD/commits/main) · 2026-08-23 20:30
+
+## ① Plan
+
+User scenario: set up green-on-red and blue-on-yellow towers, then command
+"keep the blue block under the red block" — plus 20+ advanced edge cases of this
+family, visualized in RViz.
+
+Semantic decision: `"A under B"` ⇒ B must END UP above A ⇒ executed as task(B→A)
+(blocks cannot float; something physical must move).
+
+## ② Implementation
+
+**Parser (`parse_prompt`):**
+- Verbs extended: keep/set/get/make/put + inflections (grabbing, placing, kept…;
+  first inflection attempt broke plain "grab" via `grabb(?:ed|ing)?` — fixed to
+  `grab(?:b(?:ed|ing))?`)
+- Under-relation with inversion; self-reference and unknown-reference rejected
+- Subject binding tolerates ≤2 filler tokens ("make sure **the** yellow")
+- Descriptive sentences containing explicit relations execute as commands
+  (documented simplification); pure descriptions ignored
+- Unit battery grown to **121 cases**
+
+**Fixes surfaced by the live sweep (real bugs):**
+1. **Arrange built overlapping layers**: PLACE descended to a STATIC stack height
+   every time, releasing blocks 2..n at identical altitude → ghost-overlap at base.
+   New `_stack_target_pos()` computes dynamic tower-top; arrange now builds a true
+   4-tower (top z=0.18).
+2. **Collision-vs-stacking conflict**: descending links grazed the stack column and
+   shoved placed blocks off mid-arrange. Link-collision now suppressed during
+   DESCEND/PLACE phases only (manual sweeps still protected).
+
+## ③ Test & Verification
+
+Unit: `TOTAL=121 PASS=121 FAIL=0` (was 96; +25 relational/adversarial).
+
+Live RViz2 sweep `test_p45_relational_live.py` — user's exact scenario:
+```
+setup: green on red      PASS  1@(0.151,0.1,0.06) on 0@(0.15,0.1,0.02)
+setup: blue on yellow    PASS  2@(0.199,-0.1,0.06) on 3@(0.2,-0.1,0.02)
+L4 keep-blue-under-red   PASS  0@(0.199,-0.099,0.10) on 2@(0.199,-0.1,0.06)  ← red atop blue
+L4b chain preserved      PASS  blue still on yellow -> 3-tower red>blue>yellow
+```
+Full sweep after fixes: **21/21 scenarios PASS**, including beneath/below/underneath
+synonyms, new verbs, self-under rejection, unknown-color rejection, held-pronoun
+inversion, descriptive over-trigger (documented), mid-task override, lengthy prompts,
+ALL-CAPS, rapid double prompts, get/grab synonyms, reset integrity, and the arrange
+tower rebuild.
+
+Debugging notes: four initial "failures" were inverted TEST assertions (the robot had
+executed the correct inverted semantics); two were real parser gaps (filler binding,
+self-ref collision); one was a genuine FSM design bug (static arrange height) and one
+a collision/design conflict — all fixed or documented above.
+
+## ④ Overview
+
+The robot now understands and executes relational stacking language — including the
+non-obvious inversion where "keep A under B" means B moves — while arranging builds
+real vertical towers instead of overlapping pancakes, and manual/autonomous safety
+guarantees survive the changes.
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
