@@ -256,6 +256,42 @@ class WorkspaceEnv(Node):
                 b['pos'][2] = rest_z
                 self._vel[bid] = 0.0
 
+    def separation_step(self):
+        """P4.6/E-A: resolve horizontal overlaps between same-level blocks.
+
+        Without this, two blocks released onto the same spot coexist as
+        ghost-overlap (identical xy/z). Pushes both apart along the axis of
+        least penetration until their footprints just clear. Grabbed and
+        airborne blocks are exempt.
+        """
+        import time as _time
+        H = 2 * self.BLOCK_HALF
+        now = _time.monotonic()
+        free = [b for b in self.blocks if self.grabbed_block != b['id']]
+        for i in range(len(free)):
+            for j in range(i + 1, len(free)):
+                a, b = free[i], free[j]
+                dx = b['pos'][0] - a['pos'][0]
+                dy = b['pos'][1] - a['pos'][1]
+                dz = abs(b['pos'][2] - a['pos'][2])
+                if dz >= 0.036:
+                    continue                       # different levels: legal stack
+                px, py = H - abs(dx), H - abs(dy)
+                if px <= 0 or py <= 0:
+                    continue                       # no footprint overlap
+                push_x, push_y = (px / 2 + 0.002), (py / 2 + 0.002)
+                if now - self._last_move.get(a['id'], 0) < self.DRAG_GRACE or \
+                   now - self._last_move.get(b['id'], 0) < self.DRAG_GRACE:
+                    continue                       # hand-dragged: don't fight the user
+                if px < py:
+                    sgn = 1.0 if dx >= 0 else -1.0
+                    a['pos'][0] -= sgn * push_x
+                    b['pos'][0] += sgn * push_x
+                else:
+                    sgn = 1.0 if dy >= 0 else -1.0
+                    a['pos'][1] -= sgn * push_y
+                    b['pos'][1] += sgn * push_y
+
     # ------------------------------------------------- P3.6 arm-block collision
     def _arm_segments(self):
         """Sampled points along the arm links (base -> tip), from TF."""
@@ -283,8 +319,13 @@ class WorkspaceEnv(Node):
         the pickup mechanism (proximity grab), not a collision.
         Suppressed during DESCEND/PLACE: those vertical approaches necessarily
         graze the stack column and shoving would topple arranged towers.
+        Also suppressed while CARRYING a block (LIFT/MOVE_ABOVE_STACK):
+        the loaded forearm sweeps past furniture-height obstacles on every
+        transport, and shoving bystanders mid-carry corrupts scenes (P4.6/E-B).
         """
-        if self.fsm_state in ('DESCEND', 'PLACE'):
+        carrying = self.grabbed_block is not None
+        if self.fsm_state in ('DESCEND', 'PLACE') or (
+                carrying and self.fsm_state in ('LIFT', 'MOVE_ABOVE_STACK')):
             return
         result = self._arm_segments()
         if result is None:
@@ -342,6 +383,7 @@ class WorkspaceEnv(Node):
                 self.get_logger().warn(f"Grabbed-block TF lookup failed: {e}", throttle_duration_sec=5.0)
 
         self.physics_step()
+        self.separation_step()
         self.arm_collision_step()
         self.publish_markers_and_tf()
         self.render_synthetic_camera()
