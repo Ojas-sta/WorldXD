@@ -8,6 +8,10 @@
 Each milestone below is documented in 4 parts: **① Plan → ② Implementation →
 ③ Test & Verification (old vs new logs) → ④ Overview**.
 
+Full test-suite documentation (methodology, per-case evidence, debugging trails,
+re-run commands) lives in **`teste.md`**. Workflow rules: `Onboarding.md`.
+UI reference: `design-scheme.md`.
+
 ---
 
 ## Milestone Index

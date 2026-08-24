@@ -60,6 +60,8 @@ Hardware target: NEMA17 steppers (all axes) + SG90 servo (gripper).
 | Artifact | Lives in | When |
 |----------|----------|------|
 | Milestone progress: plan, implementation, old-vs-new test logs, overview | `Milestones_Log.md` | Every milestone or bug-fix session |
+| Test suite documentation: coverage, evidence, debugging trails, retest obligations | `teste.md` | Whenever suites change or new cases are added |
+| UI/interaction rules (mandatory for all UI work) | `design-scheme.md` | Reference; update only upstream skill changes |
 | How we work, documentation rules, conventions | `Onboarding.md` (this file) | Rarely; only when workflow changes |
 | Setup, dependencies, architecture | `README.md` | When deps/architecture change |
 | Commit messages | Git history | One commit per logical unit, message states what & why |
@@ -89,22 +91,36 @@ Rules for test logs:
 | Fact | Value |
 |------|-------|
 | Model input size | 224×224 (NOT 256) — `img_size: 224` in eval YAML |
-| JEPA action output | 20 floats = 4 raw × frameskip=5; indices 0–3 = next raw action |
-| Proprio | must be passed to `unroll()` or AdaLN LayerNorm(400) crashes |
+| JEPA action output | **denormalized 4-dim raw action** `[dx,dy,dz,grip]` in [-1,1]; planning happens in normalized space internally; fp64 inputs coerced via fp32 (MPS limitation) |
+| Proprio | REAL `[ee_x,ee_y,ee_z,gripper_open]` fed raw — encode() normalizes w/ metaworld stats. Zeros are out-of-distribution; never revert to zeros placeholder |
+| CEM cost | `L2(visual final) + alpha*L2(proprio final)`, alpha=0.1 (reference semantics) |
 | CEM params | default 256 samples/3 iters (~minutes); light mode 64/2 (~14s); kwargs on `JEPAWorldModel` |
-| Device | MPS fp16, loaded via local clone `torch.hub.load(..., source='local')`; NEVER call `.to(device)` on the wrapper afterwards |
+| Goal images | rendered per-task by `goal_renderer.render_goal(blocks)` — black placeholder retired |
+| Prompt parsing | pure function `parse_prompt()` in stacking_controller.py — test with test_prompt_edge_cases.py (96 cases) |
+| FSM states | DONE, MANUAL, MOVE_ABOVE_BLOCK, DESCEND, CLOSE_GRIPPER, LIFT, MOVE_ABOVE_STACK, PLACE, OPEN_GRIPPER, RETREAT; published on `/fsm_state` |
+| Manual control | `/ee_target` jog + `/block_move` drags; GUARDRAILS lock both during tasks; MANUAL times out 3s after last drag |
+| Physics | gravity 2.5 m/s²; stable iff combined footprint overlap ≥50% across equal-height supporters; under-supported = tip off while falling; gripper zone (5.5cm of manipulator_link) collision-exempt = pickup |
 | Camera topics | `/camera/image_raw` + `/camera/camera_info`, 30Hz synthetic render |
-| Control topics | `/joint_states` (4 joints @30Hz), `/gripper_closed` (`Bool`), `user_prompt` (`String`) |
+| Telemetry topics | `/fsm_state`, `/jepa_telemetry` (real inference ms), relayed by `dashboard/backend/ros_bridge.py` to :4002 |
 | Grasp rule | nearest block within 4cm of `manipulator_link`, on rising gripper-close edge |
 | Known perf trap | 16GB RAM swaps hard if stale sims accumulate — `pkill -f launch_robot.py` between runs |
 
 ## 6. Common Commands
 
 ```bash
-pixi run python3 launch_robot.py                    # full stack (RViz + GUI + nodes)
+pixi run python3 launch_robot.py                    # full stack (RViz + GUI + markers)
 pkill -f "launch_robot.py"; pkill -f rviz2          # clean shutdown of stale sims
+pixi run wxd                                        # terminal TUI control center
+pixi run python3 dashboard/backend/ros_bridge.py    # telemetry relay (with node server.js)
 pixi run python3 test_jepa.py                       # isolated JEPA verification (no ROS)
+pixi run python3 test_prompt_edge_cases.py          # 96 parser cases (no ROS)
+pixi run python3 test_goal_renderer_property.py     # 332 renderer checks (no ROS)
+pixi run python3 test_jepa_robustness.py            # 19 hostile-input cases
+pixi run python3 test_physics_edge_sweep.py         # 42 live sim cases (~12 min)
 pixi run ros2 topic pub --once /user_prompt std_msgs/String "{data: 'reset'}"
 pixi run ros2 topic hz /camera/image_raw --window 30
 strings <logfile> | grep -E "Grabbed|Released|Task" # sim logs contain binary noise
 ```
+
+Dashboard URL once backend is running: **http://localhost:4002** (serves UI + API).
+Watch for stale servers squatting the port: `lsof -ti :4002`.

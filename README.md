@@ -107,23 +107,24 @@ sequenceDiagram
     participant CEM as CEM Optimizer
     participant PRED as AdaLN Predictor
 
-    SC->>JM: get_action(image_tensor, goal_tensor)
+    SC->>JM: get_action(image_tensor, goal_tensor, proprio=[x,y,z,grip])
     JM->>ENC: encode({"visual": image_tensor, "proprio": proprio_tensor})
     ENC-->>JM: z_init (visual: [B, 1, 1, 16, 16, 384], proprio: [B, 1, 1, 16])
     JM->>ENC: encode({"visual": goal_tensor, "proprio": proprio_tensor})
     ENC-->>JM: z_goal (visual: [B, 1, 1, 16, 16, 384])
     
     JM->>CEM: Initialize Distribution N(mean=0, std=1)
-    Loop Iterations k = 1 to 3
-        CEM->>CEM: Sample 256 Action Sequences [Horizon=5, Action_Dim=20]
+    Loop Iterations k = 1..K
+        CEM->>CEM: Sample K Action Sequences [Horizon=5, Action_Dim=20]
         CEM->>PRED: unroll(z_init, actions)
         Note over PRED: Feature-Concat Proprio: 384 + 16 -> 400 dims<br/>LayerNorm(400) & AdaLN Modulation
         PRED-->>CEM: predicted_encs [Horizon+1, 256, 16, 16, 384]
-        CEM->>CEM: Compute L2 Loss: ||z_goal - predicted_encs[-1]||^2
-        CEM->>CEM: Select Top-32 Elite Trajectories & Update N(mean, std)
+        CEM->>CEM: Cost: L2(visual final) + 0.1 x L2(proprio final)
+        CEM->>CEM: Select Elite Trajectories & Update N(mean, std)
     end
-    CEM-->>JM: Return mean[0] (Best First Action Step)
-    JM-->>SC: Action Array [dx, dy, dz, dgripper]
+    CEM-->>JM: mean[0] normalized 20-dim plan chunk
+    JM->>JM: expand [(t f) d], take first step, denormalize a*std+mean
+    JM-->>SC: Denormalized raw action [dx, dy, dz, dgripper]
 ```
 
 ---
@@ -133,26 +134,30 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> DONE: System Launch
-    
-    DONE --> IDENTIFY: Prompt Received ("arrange", "red", etc.)
-    IDENTIFY --> MOVE_TO_BLOCK: Block TF Resolved via tf2_ros
-    
-    MOVE_TO_BLOCK --> APPROACH: Reached Hover Position (z + 0.08m)
-    APPROACH --> CLOSE_GRIPPER: Reached Pick Position (z = 0.02m)
-    
-    CLOSE_GRIPPER --> LIFT: Delay (0.5s) / Gripper Closed Signal
-    LIFT --> MOVE_TO_STACK: Reached Safe Height (z = 0.15m)
-    
-    MOVE_TO_STACK --> PLACE: Hovering over Target Stack Coordinates
-    PLACE --> OPEN_GRIPPER: Reached Placement Height
-    
-    OPEN_GRIPPER --> LIFT_POST_PLACE: Delay (0.5s) / Gripper Opened Signal
-    LIFT_POST_PLACE --> CHECK_NEXT: Cleared Stack Target Height
-    
-    state CHECK_NEXT <<choice>>
-    CHECK_NEXT --> IDENTIFY: stack_all == True AND stacked_count < 4
-    CHECK_NEXT --> DONE: Task Sequence Complete
+
+    DONE --> MANUAL: /ee_target drag begins
+    MANUAL --> DONE: 3s without drag input (timeout)
+    MANUAL --> MOVE_ABOVE_BLOCK: task prompt received
+
+    DONE --> MOVE_ABOVE_BLOCK: Prompt ("pick up X", "arrange all")
+
+    MOVE_ABOVE_BLOCK --> DESCEND: Hover reached (block z + 0.08m)
+    DESCEND --> CLOSE_GRIPPER: Grasp height (z = block + 0.005m)
+    CLOSE_GRIPPER --> LIFT: Gripper settle (~0.6s) / nearest-block grab
+    LIFT --> MOVE_ABOVE_STACK: Absolute lift target (+0.06m)
+    MOVE_ABOVE_STACK --> PLACE: Above destination (block or stack point)
+    PLACE --> OPEN_GRIPPER: Placement height (+0.045m)
+    OPEN_GRIPPER --> RETREAT: Settle / release block onto supporter
+    RETREAT --> NEXT_OR_DONE: Home position [0.15, 0, 0.15]
+
+    state NEXT_OR_DONE <<choice>>
+    NEXT_OR_DONE --> MOVE_ABOVE_BLOCK: queue non-empty ("arrange all")
+    NEXT_OR_DONE --> DONE: single task complete
 ```
+
+**Guardrails (P3.3):** while any task state is active, `/ee_target` is ignored,
+interactive markers become non-draggable, and `/block_move` is refused.
+**MANUAL timeout (P3.6.2):** the arm self-returns home 3s after the last drag message.
 
 ---
 
@@ -176,7 +181,7 @@ $$\mathbf{A}^{(k)} \sim \mathcal{N}\left(\boldsymbol{\mu}^{(k)}, \boldsymbol{\Si
 
 The rollouts are evaluated against the target goal embedding using $L_2$ visual distance:
 
-$$\mathcal{J}(\mathbf{A}_i) = \frac{1}{M} \sum_{m=1}^{M} \left\| z_{g,m} - \hat{z}_{t+H, m}^{(i)} \right\|_2^2$$
+$$\mathcal{J}(\mathbf{A}_i) = \frac{1}{M} \sum_{m=1}^{M} \left\| z_{g,m} - \hat{z}_{t+H, m}^{(i)} \right\|_2^2 \;+\; \alpha \,\| p_{g} - \hat{p}_{t+H}^{(i)} \|_2^2, \quad \alpha = 0.1$$
 
 Elite actions selection and parameter updates:
 
@@ -240,19 +245,34 @@ EncPredWM Model
 
 ```
 WorldXD/
-├── launch_robot.py             # Master entrypoint launching ROS 2, RViz2, & nodes
-├── stacking_controller.py      # ROS 2 node executing IK, FSM, and JEPA callbacks
-├── jepa_model.py               # Torch wrapper implementing Meta JEPA-WMS & CEM Planner
-├── workspace_env.py            # Environment node publishing TFs, markers, and camera frames
+├── launch_robot.py             # Master entrypoint launching ROS 2, RViz2, & all nodes
+├── stacking_controller.py      # ROS 2 node: FSM, IK, prompt parsing, async JEPA worker
+├── jepa_model.py               # JEPA-WMS wrapper: reference-semantics CEM planner
+├── workspace_env.py            # World sim: TFs, markers, camera, physics engine
+├── manual_marker.py            # RViz interactive markers: EE jog + draggable blocks
 ├── terminal_prompt.py          # Tkinter natural language user interface window
-├── test_jepa.py                # Standalone verification script for JEPA model pipeline
+├── goal_renderer.py            # Synthetic goal-image renderer (pixel-matched to live cam)
+├── wxd.py                      # Textual TUI control center (pixi run wxd)
+├── test_jepa.py                # Standalone JEPA verification (no ROS)
+├── test_prompt_edge_cases.py   # 96-case prompt parser battery
+├── test_goal_renderer_property.py  # 332-check renderer property tests
+├── test_jepa_robustness.py     # 19-case hostile-input battery
+├── test_physics_edge_sweep.py  # 42-case live physics sweep
 ├── ik_interactive_tracker.py   # Standalone interactive IK solver visualizer
+├── dashboard/                  # Web dashboard: Express+Socket.IO backend, React frontend
+│   ├── backend/server.js       # Telemetry server + UI host on :4002
+│   ├── backend/ros_bridge.py   # rclpy -> HTTP telemetry relay
+│   └── frontend/               # React/Vite UI (prompt buttons, camera feed, FSM view)
+├── Milestones_Log.md           # Canonical milestone history w/ old/new test logs
+├── Onboarding.md               # Workflow rules and documentation requirements
+├── design-scheme.md            # Mandatory Apple-style UI reference
+├── teste.md                    # Extensive test documentation (489-case battery)
 ├── pixi.toml                   # Pixi environment configuration & system dependencies
 ├── pixi.lock                   # Lockfile pinning reproducible dependencies
 ├── robot_description/          # Robot mesh assets and URDF descriptions
 │   ├── urdf/eezybotarm.urdf    # Kinematic URDF definition
 │   └── rviz/config.rviz        # Preserved RViz visualization layout
-└── jepa-wms/                   # Submodule repository containing Meta JEPA-WMS source
+└── jepa-wms/                   # Vendored Meta JEPA-WMS source (with local unroll fix)
 ```
 
 ---
@@ -293,7 +313,35 @@ To launch the complete visual control loop, URDF state publisher, workspace envi
 pixi run python3 launch_robot.py
 ```
 
-### 2. Isolated Model Verification
+### 2. Web Dashboard
+
+Serves the whole UI (no separate frontend server). Requires the telemetry relay:
+
+```bash
+pixi run python3 dashboard/backend/ros_bridge.py     # ROS -> HTTP telemetry
+cd dashboard/backend && node server.js               # API + UI on :4002
+```
+
+Then open **http://localhost:4002** — prompt buttons, color-pair builder,
+live synthetic camera feed, FSM pipeline view, joint readouts, event log.
+
+### 3. Terminal TUI Control Center
+
+```bash
+pixi run wxd        # fullscreen TUI: FSM pipeline, joints, blocks, prompt input
+```
+
+Keys: `a` arrange-all · `r` reset · `g` green->yellow · `s` save camera frame · `p` focus prompt · `q` quit.
+
+### 4. Manual Control in RViz2
+
+`launch_robot.py` spawns `manual_marker.py` automatically:
+- Drag the cyan sphere to jog the arm (`/ee_target`, MANUAL state)
+- Right-click sphere for gripper toggle; drag colored cubes to move blocks
+- **Guardrails:** during tasks, markers lock and manual commands are refused;
+  MANUAL auto-expires 3s after the last drag
+
+### 5. Isolated Model Verification
 
 To verify that the JEPA-WMS checkpoint and CEM planner pass forward tensors cleanly without launching ROS 2:
 
@@ -301,18 +349,31 @@ To verify that the JEPA-WMS checkpoint and CEM planner pass forward tensors clea
 pixi run python3 test_jepa.py
 ```
 
-### 3. Natural Language Interface Commands
+### 6. Test Batteries (489 cases — see teste.md)
 
-Once the simulation prompt window launches, submit any of the following natural language targets:
+```bash
+pixi run python3 test_prompt_edge_cases.py           # 96 parser cases (no ROS)
+pixi run python3 test_goal_renderer_property.py      # 332 renderer checks (no ROS)
+pixi run python3 test_jepa_robustness.py             # 19 hostile-input cases (no ROS)
+pixi run python3 test_physics_edge_sweep.py          # 42 live sim cases (~12 min)
+```
+
+Exit code 0 = all pass. Full documentation in `teste.md`.
+
+### 7. Natural Language Interface Commands
+
+Submit via Tkinter window, dashboard, or wxd TUI:
 
 | Command | Action Executed |
 | :--- | :--- |
-| `stack the red box` | Identifies `block_0`, executes pick & place onto target stack |
-| `stack the green box` | Identifies `block_1`, moves to stack position |
-| `stack the blue box` | Identifies `block_2`, moves to stack position |
-| `stack the yellow box` | Identifies `block_3`, moves to stack position |
-| `arrange all boxes` | Triggers sequential loop stacking all 4 blocks in sequence |
-| `reset stack` | Clears state machine and resets internal stack count to 0 |
+| `pick up the green block and place it on top of the yellow block` | Full pick-and-place onto named supporter |
+| `pick up the red block` | Move red to the fixed stack point |
+| `stack the blue box on the yellow one` | Verb synonyms: pick/grab/move/take/lift/place |
+| `arrange all blocks` / `stack everything` | Sequential loop stacking all 4 blocks |
+| `reset` / `clear` / `stop` / `unstack` | Cancel task, reset scene + state machine |
+
+Parser precedence: reset > arrange > pick-task > unrecognized.
+Full 96-case grammar documentation: `teste.md` §2.
 
 ---
 
