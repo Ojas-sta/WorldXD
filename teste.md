@@ -2,7 +2,7 @@
 
 **Scope:** complete record of every test suite built and executed in this project,
 with methodology, raw evidence, known limitations, and retest obligations.
-**Last updated:** 2026-08-23 19:15 · **Total documented cases:** 489 + regression suites
+**Last updated:** 2026-08-23 22:00 · **Total documented cases:** 522 + regression suites
 **Related:** `Milestones_Log.md` (milestone history) · `Onboarding.md` (workflow rules)
 
 ---
@@ -29,6 +29,7 @@ with methodology, raw evidence, known limitations, and retest obligations.
 | Goal renderer properties | `test_goal_renderer_property.py` | 332 | No | ~5s | ✅ 332/332 |
 | JEPA robustness | `test_jepa_robustness.py` | 19 | No (loads model) | ~3min | ✅ 19/19 |
 | Live physics sweep | `test_physics_edge_sweep.py` | 42 | **Yes (RViz2 sim)** | ~12min | ✅ 41+1 non-event |
+| P4.7 relational matrix | `test_p47_relational_matrix.py` | 33 | **Yes (RViz2 sim)** | ~25min | ✅ 33/33 |
 | JEPA verification (P0) | `test_jepa.py` | 1 end-to-end | No | ~1min | ✅ PASS |
 | Goal renderer acceptance | `test_goal_renderer.py` | 26 | No | ~2s | ✅ 26/26 |
 
@@ -263,7 +264,33 @@ Tracked in `Milestones_Log.md` §Open Items; obligations for **P4.1 retest**:
 | batch>1 planning | unsupported (fallback zeros) | low priority |
 | Duplicate prompts restart tasks mid-run | `_start_task` called on every receipt | medium |
 
-## 9. How to Re-run Everything
+## 9. P4.7 Relational Matrix (33 live scenarios)
+
+**Files:** `test_p47_relational_matrix.py` (+5 supplementary inline) · **Live RViz2** · **2026-08-23**
+
+Exercises the unstack-first planner (issue #2) across the full relational grammar:
+every ordered under-pair (12), occupied-column planning through towers (6),
+buried picks (2), synonyms/pronouns (4+4), top-relation regression, phrasing stress
+(lengthy/CAPS/polite-question), and robustness (self-under, unknown color,
+mid-task override + reset recovery).
+
+**Result: 33/33 PASS.** Highlights (live TF evidence):
+
+```
+G2  yellow-under-red through towers  -> red stacked on yellow, blockers parked
+G3  buried red -> onto yellow        -> blocker parked first, strict pass
+L10-class filler binding             -> 'make sure the yellow' binds correctly
+G7  mid-task override + reset        -> no overlap anywhere, FSM recovers
+S4  towers-B yellow-under-red        -> strict pass (second tower config)
+```
+
+Harness lessons (fixed in-suite):
+- `reset` from an already-DONE FSM never changes state — say()-style change
+  detection burns its full timeout. Use a fixed publish-burst reset helper.
+- First publishes of a fresh node can lose the race with DDS discovery —
+  warm up 3s and publish-until-FSM-reacts.
+
+## 10. How to Re-run Everything
 
 ```bash
 cd /Users/roopalisingh/WorldXD
