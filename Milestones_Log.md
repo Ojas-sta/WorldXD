@@ -836,6 +836,44 @@ filed as issue #2 for P4.7.
 
 ---
 
+# P4.7 — Unstack-first multi-step planning (issue #2 CLOSED)
+
+**Commit:** [`see git log`](https://github.com/Ojas-sta/WorldXD/commits/main) · 2026-08-23 21:15
+
+## ① Plan
+
+User rejected the P4.5 "PARTIAL" outcome with screenshot proof: towers demolished,
+yellow NOT under red. Root cause: no decomposition — the FSM cannot move blockers
+before executing a pair. Fix: plan unstack subtasks first.
+
+## ② Implementation
+
+`stacking_controller.py`:
+- `plan_task(pick, place)` — decomposes: (a) park blockers stacked ON the pick
+  target, (b) park occupants of the destination column, (c) execute the pair.
+  Parking destinations come from `_staging_pos()` (first free of 4 staging spots).
+- FSM destinations accept `'STAGING'`; goal-render skipped for staging moves.
+
+## ③ Test & Verification
+
+User's exact failing scenario, now STRICT pass:
+```
+setup towers: green>red, blue>yellow
+prompt: "put the yellow block under the red block"
+watched: green parked -> blue parked -> red stacked ON yellow
+FINAL: red(0.200,-0.099,0.060) yellow(0.200,-0.100,0.020)
+STRICT yellow-under-red: PASS     no interpenetration with blue: PASS
+```
+vs pre-P4.7 run: blocks scattered, red beside blue overlapping — FAIL.
+
+## ④ Overview
+
+Relational commands through occupied columns now complete correctly via automatic
+decomposition. Known polish item: consecutive staging moves can target the same
+spot (separation pass resolves the overlap; cosmetic only).
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
