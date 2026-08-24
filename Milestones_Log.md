@@ -700,6 +700,42 @@ against the live simulator.
 
 ---
 
+# P4.2 — JEPA Goal View: RViz fix + web dashboard stream
+
+**Commit:** [`see git log`](https://github.com/Ojas-sta/WorldXD/commits/main) · 2026-08-23 19:45
+
+## ① Plan
+
+User report: RViz "JEPA Goal View" blank. Also requested the goal view in the web
+dashboard (P4.2) and a hardware-stack answer for going physical.
+
+## ② Root cause + Implementation
+
+**Blank view root cause:** RViz's Camera display auto-subscribes to a sibling
+CameraInfo topic derived from the image topic (`/jepa/goal_image` → `/jepa/camera_info`);
+with no publisher, the display renders nothing. Fix: controller publishes 224×224
+plumb_bob intrinsics (f=200, c=112) matching workspace_env projection. Second bug en
+route: ROS2 message validation rejects int literals inside `k`/`p` float arrays.
+
+**Dashboard stream:** ros_bridge subscribes `/jepa/goal_image` → JPEG → POST
+`/ros/goal_camera` → server emits `goal_camera` socket event; CameraFeed generalized
+(event/title/color props) and rendered twice in App (live ~8fps + goal 1fps).
+
+## ③ Test & Verification
+
+```
+camera_info: [(224, 224, np.float64(200.0))]        ← publishing after int-literal fix
+dashboard goal feed bytes: 1764                      ← base64 JPEG served on /api/goal_camera
+Task: pick block 3 -> block 1 ... Task complete      ← live yellow->green re-verified
+```
+
+## ④ Overview
+
+The planner's imagination is now observable everywhere: RViz panel, dashboard panel,
+and API. Two subtle ROS2/RViz contract bugs documented for posterity.
+
+---
+
 # Open Items
 
 | ID | Item | Notes |
