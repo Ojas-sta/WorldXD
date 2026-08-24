@@ -300,11 +300,18 @@ class StackingController(Node):
             self.get_logger().warn(f"Image conversion error: {e}")
 
     def _jepa_worker(self):
+        # P4-lag fix: CEM planning is expensive (~10s of MPS). Planning around
+        # the clock -- even while idle -- starved RViz2's render loop on the
+        # shared GPU (arm lag/glitch). Now: plan ONLY during active tasks,
+        # max once per 20s, and sleep-poll otherwise.
+        last_run = 0.0
         while True:
-            self._frame_event.wait()
-            self._frame_event.clear()
-            frame = self._latest_frame
+            if self.state == 'DONE' or time.monotonic() - last_run < 20.0:
+                time.sleep(0.5)
+                continue
+            frame = getattr(self, '_latest_frame', None)
             if frame is None:
+                time.sleep(0.25)
                 continue
             try:
                 img_tensor = self.transform(frame).unsqueeze(0).to(self.device)
@@ -321,8 +328,10 @@ class StackingController(Node):
                 tele.data = (time.perf_counter() - t0) * 1000.0
                 self.jepa_telemetry_pub.publish(tele)
                 self.latest_action = action
+                last_run = time.monotonic()
             except Exception as e:
                 self.get_logger().warn(f"JEPA inference error: {e}")
+                time.sleep(2.0)
             finally:
                 self._latest_frame = None
 
