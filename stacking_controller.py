@@ -22,7 +22,10 @@ BLOCK_HOME = {0: [0.15, 0.1, 0.02], 1: [0.20, 0.1, 0.02],
               2: [0.15, -0.1, 0.02], 3: [0.20, -0.1, 0.02]}
 
 # Prompt verbs recognized for pick tasks (regex-escaped where needed)
-_PICK_VERBS = r'(?:pick(?:\s+up)?|grab|move|take|lift|place)'
+_PICK_VERBS = r'(?:pick(?:ing)?(?:\s+up)?|grab(?:b(?:ed|ing))?|mov(?:e|es|ing)|tak(?:e|ing)|lif(?:t|ting)|plac(?:e|es|ing)|put|ke(?:pt|ep)|set(?:ting)?|get|gettings?|mak(?:e|ing))'
+_ACTION_VERB = re.compile(
+    r'\b(?:pick|grab|move|take|lift|place|put|keep|set|get|make|stack|arrange'
+    r'|reset|clear|stop|separate|unstack|split)\b')
 _PLACE_PATTERNS = [
     r'on\s*top\s+of\s+(?:the\s+)?',
     r'onto\s+(?:the\s+)?',
@@ -30,6 +33,13 @@ _PLACE_PATTERNS = [
     r'over\s+(?:the\s+)?',
     r'above\s+(?:the\s+)?',
 ]
+# P4.5: spatial-under relations. "A under B" => B must END UP on top,
+# so the executed task is (pick=B, place=A).
+_UNDER_PATTERN = r'(?:under|beneath|below|underneath)\s+(?:the\s+)?(red|green|blue|yellow)'
+
+
+def c_name(idx):
+    return {v: k for k, v in COLOR_TO_ID.items()}[idx]
 
 
 def parse_prompt(text):
@@ -40,6 +50,10 @@ def parse_prompt(text):
       {'action': 'arrange'}
       {'action': 'task', 'pick': id, 'place': id_or_None}   # place None = stack point
       {'action': None}                                      # unrecognized
+    P4.5 spatial relations:
+      "A on top of B"  -> task(A, B)
+      "A under B"      -> task(B, A)   # B ends up above A
+    Descriptive sentences with no action verb are ignored.
     """
     if not text or not text.strip():
         return {'action': None}
@@ -56,16 +70,51 @@ def parse_prompt(text):
                          r'each other|one tower|a tower', t)):
         return {'action': 'arrange'}
 
-    pick = place = None
-    m_pick = re.search(_PICK_VERBS + r'\s+(?:up\s+)?(?:the\s+)?(red|green|blue|yellow)', t)
-    if m_pick:
-        pick = COLOR_TO_ID[m_pick.group(1)]
-    else:
+    # P4.5: descriptive sentences (no action verb anywhere) are not commands,
+    # EXCEPT when an explicit spatial-relation phrase carries the intent.
+    has_relation_ctx = bool(re.search(
+        r'on\s*top\s+of|(?:under|beneath|below|underneath)\s+the?', t))
+    if not (_ACTION_VERB.search(t) or has_relation_ctx):
+        return {'action': None}
+    # NOTE: purely descriptive sentences containing a spatial relation
+    # ("the red block is under the blue block") ARE executed as commands --
+    # deliberate robot-grammar simplification, documented in teste.md.
+
+    def find_subject():
+        m = re.search(_PICK_VERBS + r'(?:\s+\w+){0,2}?\s+(?:the\s+)?'
+                      r'(red|green|blue|yellow)', t)
+        if m:
+            return COLOR_TO_ID[m.group(1)]
         for name, idx in COLOR_TO_ID.items():
             if re.search(r'\b' + name + r'\b', t):
-                pick = idx
-                break
+                return idx
+        return None
 
+    # --- under/beneath/below relation (inverted pair) ---
+    mentions_under = re.search(r'under|beneath|below|underneath', t)
+    m_under = re.search(_UNDER_PATTERN, t)
+    if mentions_under and not m_under:
+        # under-intent with an unknown reference color: not executable
+        return {'action': None}
+    if m_under:
+        ref = COLOR_TO_ID[m_under.group(1)]
+        subj = find_subject()
+        if subj is None:
+            return {'action': None}
+        if subj == ref:
+            # subject fallback collided with the reference; if exactly one
+            # OTHER color is mentioned, that one must be the mover
+            others = {c for c in COLOR_TO_ID.values()
+                      if re.search(r'\b' + c_name(c) + r'\b', t)} - {ref}
+            if len(others) == 1:
+                subj = others.pop()
+            else:
+                return {'action': None}      # "blue under blue": meaningless
+        return {'action': 'task', 'pick': ref, 'place': subj}
+
+    pick = find_subject()
+
+    place = None
     for pat in _PLACE_PATTERNS:
         m_place = re.search(pat + r'(red|green|blue|yellow)', t)
         if m_place:
@@ -298,6 +347,21 @@ class StackingController(Node):
         if self.state == 'MANUAL':
             self._set_gripper(bool(msg.data))
 
+    def _stack_target_pos(self):
+        """Dynamic stack point: fixed xy, z = current top-block center.
+
+        P4.5 fix: arranging previously descended to a STATIC height every
+        time, releasing blocks 2..n at the same altitude so they overlapped
+        at the base level instead of building upward.
+        """
+        stx, sty = self.stack_target[0], self.stack_target[1]
+        top = 0.02  # table-level first-layer center
+        for i in range(4):
+            bx, by, bz = self._block_pos(i)
+            if abs(bx - stx) < 0.03 and abs(by - sty) < 0.03:
+                top = max(top, bz)
+        return [stx, sty, top]
+
     # ------------------------------------------------------------------- IK
     def solve_ik(self, x, y, z):
         theta1 = math.atan2(y, x)
@@ -395,7 +459,7 @@ class StackingController(Node):
 
         elif self.state == 'MOVE_ABOVE_STACK':
             if self.place_block_id is None:
-                t = list(self.stack_target)
+                t = self._stack_target_pos()
             else:
                 t = self._block_pos(self.place_block_id)
             if self._goto(t[0], t[1], t[2] + hover_z):
@@ -404,7 +468,7 @@ class StackingController(Node):
 
         elif self.state == 'PLACE':
             if self.place_block_id is None:
-                t = list(self.stack_target)
+                t = self._stack_target_pos()
             else:
                 t = self._block_pos(self.place_block_id)
             if self._goto(t[0], t[1], t[2] + 0.045):  # one block-height above surface

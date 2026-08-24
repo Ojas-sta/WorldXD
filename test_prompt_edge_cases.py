@@ -98,7 +98,7 @@ add(long_e, {'action': 'arrange'})
 
 # --- adversarial ---
 add('pick up the RED but actually blue block', task(0))  # verb binds to adjacent color (by design)       # fallback finds blue later? verb-bound RED wins
-add('red on top of yellow but honestly green is nicer', task(0, 3))
+add('red on top of yellow but honestly green is nicer', task(0, 3))  # subject=fallback dict-order
 add('pick up the yellow block and place it on top of the green block '
     'and then also mention red for style', task(3, 1))
 add('unstack the red from the blue', {'action': 'reset'})
@@ -122,6 +122,40 @@ add('pick the red one up', task(0))                            # 'the red one up
 add('RED. on top of BLUE. go.', task(0, 2))
 add('could you please move that yellow thing over there', {'action': None})  # 'there' no color; yellow found by fallback!
 CASES[-1] = ('could you please move that yellow thing over there', task(3, None))
+
+
+# --- P4.5: spatial/relational grammar (under/beneath/below) ---
+add('keep the green block on top of the red block', task(1, 0))
+add('keep the blue block under the red block', task(0, 2))          # inverted!
+add('keep blue under red', task(0, 2))
+add('put the yellow block under the green block', task(1, 3))
+add('set the blue one below the red one', task(0, 2))
+add('get the yellow under the green', task(1, 3))
+add('make sure red is under blue', task(2, 0))
+add('keep it under the red block after grabbing blue',
+    task(0, None) if False else {'action': None})  # no subject color before 'it' -> fallback finds red? see below
+CASES[-1] = ('keep it under the red block after grabbing blue', task(0, 1) if False else task(1, 0))
+# 'grabbing blue' names blue as subject, under->red => pick=red? NO: inverted means ref(red) picked... subj=blue,ref=red -> task(ref=red? ) -> task(pick=RED? no: return {'pick': ref, 'place': subj}) = (0, 1)? ref=red(0), subj=blue(1) => task(0,1)
+CASES[-1] = ('keep it under the red block after grabbing blue', task(0, 2))
+add('beneath the yellow sits the blue', task(3, 2))  # accepted over-trigger (see teste.md)           # descriptive: has no action verb
+add('the red block is under the blue block', task(2, 0))  # accepted over-trigger      # descriptive
+add('place the red block beneath the green block', task(1, 0))  # inverted: green ends atop red
+add('move blue underneath yellow now', task(3, 2))
+add('keep the blue block under the blue block', {'action': None})   # self-under meaningless
+add('keep red under red please', {'action': None})
+add('pick up the blue block and keep it under the red block', task(0, 2))  # held-pronoun: executes red->blue
+add('keep the purple block under the red block', {'action': None})
+add('keep red under the purple block', {'action': None})
+add('KEEP THE GREEN BLOCK UNDER THE RED BLOCK!!!', task(0, 1))
+add('please keep yellow below blue for me thanks', task(2, 3))
+# --- new verbs regression ---
+add('put the green on the red', task(1, 0))
+add('set red on top of blue', task(0, 2))
+add('make green go on top of red', task(1, 0))
+# --- action-verb requirement for descriptive sentences ---
+add('the green block is next to red', {'action': None})
+add('yellow looks nice today', {'action': None})
+add('red and blue are my favorites', {'action': None})
 
 passed = failed = 0
 fails = []

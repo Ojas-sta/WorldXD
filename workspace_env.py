@@ -36,6 +36,7 @@ class WorkspaceEnv(Node):
         # P3.3 guardrail: track task activity; blocks are fixed while a task runs
         from std_msgs.msg import Float32 as _F32
         self.task_busy = False
+        self.fsm_state = 'DONE'
         self.fsm_sub = self.create_subscription(String, 'fsm_state', self.fsm_callback, 10)
         
         self.gripper_closed = False
@@ -89,6 +90,9 @@ class WorkspaceEnv(Node):
 
     def fsm_callback(self, msg):
         self.task_busy = msg.data not in ('DONE', 'MANUAL')
+        # P4.5: during precision vertical phases the descending links graze the
+        # stack column; shoving placed blocks off mid-stack breaks arranging.
+        self.fsm_state = msg.data
 
     def block_move_callback(self, msg):
         """Drag updates from manual_marker: relocate the named block.
@@ -277,7 +281,11 @@ class WorkspaceEnv(Node):
 
         The gripper zone around manipulator_link is exempt: contact there is
         the pickup mechanism (proximity grab), not a collision.
+        Suppressed during DESCEND/PLACE: those vertical approaches necessarily
+        graze the stack column and shoving would topple arranged towers.
         """
+        if self.fsm_state in ('DESCEND', 'PLACE'):
+            return
         result = self._arm_segments()
         if result is None:
             return
