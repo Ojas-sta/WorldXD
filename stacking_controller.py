@@ -87,6 +87,8 @@ class StackingController(Node):
         self.gripper_pub = self.create_publisher(Bool, '/gripper_closed', 10)
         self.fsm_pub = self.create_publisher(String, 'fsm_state', 10)
         self.jepa_telemetry_pub = self.create_publisher(Float32, 'jepa_telemetry', 10)
+        # P4: RViz visibility into what the planner is planning TOWARD
+        self.goal_img_pub = self.create_publisher(Image, '/jepa/goal_image', 10)
         self.camera_sub = self.create_subscription(Image, '/camera/image_raw', self.image_callback, 10)
         self.prompt_sub = self.create_subscription(String, 'user_prompt', self.prompt_callback, 10)
         # Manual jog: interactive-marker drags stream /ee_target; while targets
@@ -151,7 +153,15 @@ class StackingController(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.timer = self.create_timer(1.0 / 30.0, self.control_loop)
+        self._goal_img_msg = None
+        self.create_timer(1.0, self.publish_goal_image)   # RViz goal view feed
         self.get_logger().info("Stacking Controller Initialized.")
+
+    def publish_goal_image(self):
+        """Republish last rendered goal at 1Hz for the RViz 'JEPA Goal View'."""
+        if self._goal_img_msg is not None:
+            self._goal_img_msg.header.stamp = self.get_clock().now().to_msg()
+            self.goal_img_pub.publish(self._goal_img_msg)
 
     # ------------------------------------------------------------------ prompts
     def _block_pos(self, block_id):
@@ -185,6 +195,10 @@ class StackingController(Node):
                                         base_pos[2] + 0.04 * max(level - 1, 0)]})
             goal_img = goal_renderer.render_goal(goal_blocks)
             self.goal_tensor = self.transform(goal_img).unsqueeze(0).to(self.device)
+            self._goal_img_msg = self.bridge.cv2_to_imgmsg(goal_img, encoding='bgr8')
+            self._goal_img_msg.header.frame_id = 'camera_link'
+            self._goal_img_msg.header.stamp = self.get_clock().now().to_msg()
+            self.goal_img_pub.publish(self._goal_img_msg)
             self.get_logger().info("Goal image rendered for JEPA planner.")
         except Exception as e:
             self.get_logger().warn(f"Goal render failed (keeping previous): {e}")

@@ -10,20 +10,6 @@ Visualization Manager:
     - Class: rviz_default_plugins/MoveCamera
     - Class: rviz_default_plugins/Select
   Displays:
-  - Class: rviz_default_plugins/InteractiveMarkers
-    Enable Transparency: true
-    Name: ManualJogMarker
-    Show Axes: false
-    Show Descriptions: true
-    Show Visual Aids: false
-    Update Topic:
-      Depth: 5
-      Durability Policy: Volatile
-      History Policy: Keep Last
-      Reliability Policy: Reliable
-      Value: /ee_marker/update
-    Value: true
-
     - Class: rviz_default_plugins/Grid
       Name: Grid
       Value: true
@@ -35,20 +21,42 @@ Visualization Manager:
         Value: /robot_description
       Name: RobotModel
       Value: true
-    - Class: rviz_default_plugins/InteractiveMarkers
-      Name: InteractiveMarkers
-      Update Topic:
-        Value: /ik_target/update
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 0.5
+      Name: TF Frames
+      Show Arrows: false
+      Show Axes: true
+      Show Names: false
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Name: Dummy Blocks
       Topic:
         Value: /workspace_blocks
       Value: true
+    - Class: rviz_default_plugins/InteractiveMarkers
+      Enable Transparency: true
+      Name: ManualJogMarker
+      Show Axes: false
+      Show Descriptions: true
+      Show Visual Aids: false
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /ee_marker/update
+      Value: true
     - Class: rviz_default_plugins/Camera
-      Name: Synthetic Camera
+      Name: Live Camera (JEPA input)
       Topic:
         Value: /camera/image_raw
+      Value: true
+    - Class: rviz_default_plugins/Camera
+      Name: JEPA Goal View (rendered target)
+      Topic:
+        Value: /jepa/goal_image
       Value: true
   Global Options:
     Fixed Frame: base_link
